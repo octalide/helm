@@ -134,6 +134,22 @@ async function stopDaemon(paths: HelmPaths): Promise<boolean> {
   throw new Error('helmd did not stop');
 }
 
+// a session's letters and change notices as ndjson on stdout, until the daemon goes away; the mod reads it, since a
+// hooks module holds no socket of its own
+function stream(paths: HelmPaths, session: string | undefined): Promise<void> {
+  if (!session) throw new Error('usage: helmd stream <session>');
+  return new Promise((resolve, reject) => {
+    const req = request({ socketPath: paths.socket, path: `/v1/sessions/${encodeURIComponent(session)}/stream` }, (res) => {
+      if (res.statusCode !== 200) return reject(new Error(`stream refused: http ${res.statusCode}`));
+      res.pipe(process.stdout);
+      res.on('end', resolve);
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 async function main(): Promise<void> {
   const paths = helmPaths(process.env as never);
   const cmd = process.argv[2] ?? 'status';
@@ -156,11 +172,13 @@ async function main(): Promise<void> {
       process.exitCode = h ? 0 : 1;
       return;
     }
+    case 'stream':
+      return stream(paths, process.argv[3]);
     case 'version':
       console.log(VERSION);
       return;
     default:
-      console.error('usage: helmd serve|start|stop|restart|status|version');
+      console.error('usage: helmd serve|start|stop|restart|status|stream <session>|version');
       process.exitCode = 2;
   }
 }
