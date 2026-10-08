@@ -1,12 +1,14 @@
+import { atom, read, update } from 'claude-code';
 import type { EngineInterface, Register } from 'claude-code';
 import { helmPaths, type PathEnv } from '../src/core/paths.ts';
 import { PROTOCOL, type StreamFrame } from '../src/core/protocol.ts';
 import { compareVersions, isRepoName, repoOfRemote } from '../src/core/repo.ts';
-import type { AgentRecord, AgentStatus, Effort, RepoName, SessionRole } from '../src/core/types.ts';
+import type { AgentRecord, AgentStatus, Effort, Fleet, RepoName, SessionRole } from '../src/core/types.ts';
 import { HelmClient, HelmError } from '../src/mod/client.ts';
 import { type DispatchPort, dispatchTool, issueAgentName } from '../src/mod/dispatch.ts';
 import { Mailbox } from '../src/mod/mailbox.ts';
 import { type Tool, TOOLS } from '../src/mod/tools.ts';
+import { bandRow, paneRows, type Row, type Self, statusText } from '../src/mod/view.ts';
 import { PLUGIN, ROLES, type Runtime, toolEnv } from './runtime.ts';
 
 type $ = EngineInterface;
@@ -16,6 +18,14 @@ type Port = DispatchPort;
 
 const HEARTBEAT_MS = 15_000;
 const RECONNECT_MS = 3_000;
+// the pane redraws from helmd at most this often, however fast changes come
+const REFRESH_MS = 1_500;
+const PANE = 'helm';
+
+// the fleet itself stays in the module, since the state contract holds only self-contained data; the atom is the
+// stamp that tells a drawing to read it again
+const fleetAt = atom({ plugin: 'helm', key: 'fleetAt' } as const, 0);
+let fleet: Fleet | undefined;
 
 let rt: Runtime | undefined;
 
@@ -129,7 +139,7 @@ function pump($: $, r: Runtime): void {
         for (let i = buf.indexOf('\n'); i >= 0; i = buf.indexOf('\n')) {
           const line = buf.slice(0, i);
           buf = buf.slice(i + 1);
-          if (line) await frame(r, JSON.parse(line) as StreamFrame);
+          if (line) await frame($, r, JSON.parse(line) as StreamFrame);
         }
       }
     } catch (e) {
@@ -148,8 +158,41 @@ function pump($: $, r: Runtime): void {
   void run();
 }
 
-async function frame(r: Runtime, f: StreamFrame): Promise<void> {
+async function frame($: $, r: Runtime, f: StreamFrame): Promise<void> {
   if (f.type === 'letter') await r.mailbox.receive(f.letter);
+  if (f.type === 'changed' || f.type === 'hello') refresh($, r);
+}
+
+const selfOf = (r: Runtime): Self => ({ session: r.session, role: r.role, ...(r.repo ? { repo: r.repo } : {}) });
+
+let refreshTimer: { cancel: () => void } | undefined;
+let lastRefresh = 0;
+
+// the fleet for the pane, band and status line, read once per window however many changes land in it
+function refresh($: $, r: Runtime): void {
+  if (refreshTimer || !r.alive) return;
+  const wait = Math.max(0, lastRefresh + REFRESH_MS - Date.now());
+  refreshTimer = $.clock.after(wait, () => {
+    refreshTimer = undefined;
+    lastRefresh = Date.now();
+    void (async () => {
+      const f = await r.client.fleet(true);
+      fleet = f;
+      await update($, fleetAt, () => f.at);
+      $.ui.status(statusText(f, selfOf(r)));
+    })().catch((e: Error) => $.ui.log(`helm: refresh failed: ${e.message}`, { to: 'debug' }));
+  });
+}
+
+function rowsOf($: $, e: Parameters<$['ui']['resolve']>[0], rows: Row[]) {
+  const { Box, Text } = $.ui.resolve(e);
+  return (
+    <Box flexDirection="column">
+      {rows.map((row) => (
+        <Text wrap="truncate-end">{row.length ? row.map((s) => <Text {...(s.color ? { color: s.color } : {})} dimColor={s.dim ?? false} bold={s.bold ?? false}>{s.text}</Text>) : ' '}</Text>
+      ))}
+    </Box>
+  );
 }
 
 async function helpText(r: Runtime): Promise<string> {
@@ -157,7 +200,7 @@ async function helpText(r: Runtime): Promise<string> {
   return [
     `helm ${r.version} · session ${r.session} · role ${r.role}${r.repo ? ` · ${r.repo}` : ''}`,
     h ? `helmd ${h.version} pid ${h.pid} · ${h.web ?? ''}` : 'helmd not answering',
-    'commands: /helm role coordinator|repo|other [owner/name] · /helm web · /helm restart',
+    'commands: /helm pane · /helm role coordinator|repo|other [owner/name] · /helm web · /helm restart',
   ].join('\n');
 }
 
@@ -214,12 +257,14 @@ export const register: Register = (on) => {
     try {
       await ensureDaemon($, client, version);
       await bind($, r);
+      r.web = (await client.health()).web;
       issueTypes.clear();
       await registerTiers($, client, repo).catch((err: Error) => $.ui.log(`helm: issue agents not registered: ${err.message}`));
     } catch (err) {
       $.ui.log(`helm: ${(err as Error).message}`);
     }
     pump($, r);
+    if (r.role !== 'other') void $.ui.open({ id: PANE, title: 'helm' });
     r.timers.push(
       $.clock.every(HEARTBEAT_MS, () => {
         void (async () => {
@@ -281,6 +326,30 @@ export const register: Register = (on) => {
   // issue agents start through dispatch, which claims and routes them; the model never picks one itself
   on('agent.offer', ($, e, next) => (e.agent.startsWith(`${PLUGIN}:issue-`) ? { isOffered: false } : next(e))).catch(($, e, next) => next(e));
 
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const r = rt;
+    await read($, fleetAt);
+    const f = fleet;
+    const { Text } = $.ui.resolve(e);
+    if (!r || !f) return <Text dimColor>helm is connecting to helmd</Text>;
+    return rowsOf($, e, paneRows(f, selfOf(r), Math.max(4, (e.viewport?.rows ?? 24) - 2), r.web));
+  });
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const r = rt;
+    await read($, fleetAt);
+    const f = fleet;
+    const band = r && f && !e.props.hasSurvey ? bandRow(f, selfOf(r)) : undefined;
+    if (!band) return next(e);
+    const { Box } = $.ui.resolve(e);
+    return (
+      <Box flexDirection="column">
+        {await next(e)}
+        {rowsOf($, e, [band])}
+      </Box>
+    );
+  });
+
   on('command.run', { command: PLUGIN }, async ($, e) => {
     const r = rt;
     if (!r) return { text: 'helm is starting' };
@@ -294,6 +363,11 @@ export const register: Register = (on) => {
         if (repo) r.repo = repo;
         await r.client.role(r.session, role, repo);
         return { text: `this session is now ${role}${repo && role === 'repo' ? ` for ${repo}` : ''}` };
+      }
+      if (head === 'pane') {
+        const opened = await $.ui.open({ id: PANE, title: 'helm', focus: true });
+        refresh($, r);
+        return { text: opened.isPlaced ? 'helm pane open' : `helm pane waits: ${opened.reason}` };
       }
       if (head === 'web') {
         const url = (await r.client.health()).web ?? '';

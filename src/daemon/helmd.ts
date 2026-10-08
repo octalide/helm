@@ -355,10 +355,11 @@ export class Daemon {
       .sort((a, b) => (a.owner ?? '').localeCompare(b.owner ?? '') || a.order - b.order);
   }
 
-  fleet(): Fleet {
+  // lite leaves out each repository's forge and local state: what a pane redraws from on every change
+  fleet(lite = false): Fleet {
     const d = this.ledger.data;
     const repos: Record<RepoName, RepoView> = {};
-    for (const repo of this.watched()) repos[repo] = this.repoView(repo);
+    for (const repo of this.watched()) repos[repo] = lite ? { polling: this.repoView(repo).polling } : this.repoView(repo);
     return {
       version: this.version,
       sessions: Object.values(d.sessions).sort((a, b) => b.seenAt - a.seenAt),

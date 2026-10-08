@@ -55,7 +55,7 @@ export function routes(d: Daemon, stop: () => void): Route[] {
       setTimeout(stop, 50);
       return { stopping: true };
     }),
-    compile('GET', '/v1/fleet', () => d.fleet(), true),
+    compile('GET', '/v1/fleet', ({ query }) => d.fleet(query.get('lite') === '1'), true),
     compile('GET', '/v1/config', ({ query }) => d.configFor(query.get('repo') ?? undefined), true),
     compile('POST', '/v1/sessions', async ({ body }) => {
       const b = (await body()) as RegisterBody;
