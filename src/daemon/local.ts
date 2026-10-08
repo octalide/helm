@@ -3,6 +3,7 @@ import { readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { repoOfRemote } from '../core/repo.ts';
 import type { Branch, LocalState, RepoName, Worktree } from '../core/types.ts';
 
 const exec = promisify(execFile);
@@ -16,12 +17,6 @@ export const git: Git = async (cwd, args) => {
 
 export function expandHome(p: string): string {
   return p === '~' ? homedir() : p.startsWith('~/') ? join(homedir(), p.slice(2)) : resolve(p);
-}
-
-// owner/name of a github remote url in any of its spellings
-export function repoOfRemote(url: string): RepoName | undefined {
-  const m = /github\.com[:/]+([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(url.trim());
-  return m ? `${m[1]}/${m[2]}` : undefined;
 }
 
 const SKIP = new Set(['node_modules', '.cache', 'target', 'build', 'dist', 'out', '.worktrees', 'worktrees']);

@@ -85,26 +85,3 @@ export function retiredBy(e: HelmEvent, s: Subscription): boolean {
 export function expired(s: Subscription, now: number): boolean {
   return typeof s.until === 'object' && Date.parse(s.until.at) <= now;
 }
-
-export function describeScope(s: Pick<Subscription, 'scope' | 'repo'>): string {
-  const sc = s.scope;
-  const where = s.repo ?? '';
-  switch (sc.kind) {
-    case 'repo':
-      return where;
-    case 'issue':
-      return `${where} issue #${sc.number}`;
-    case 'pr':
-      return `${where} pr #${sc.number}`;
-    case 'branch':
-      return `${where} branch ${sc.name}`;
-    case 'run':
-      return `${where} run ${sc.id}`;
-    case 'tag':
-      return `${where} tag ${sc.glob}`;
-    case 'work':
-      return 'own work';
-    case 'fleet':
-      return 'fleet';
-  }
-}
