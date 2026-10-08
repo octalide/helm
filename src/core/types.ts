@@ -359,7 +359,8 @@ export type Letter = {
   at: number;
 };
 
-export type RepoView = { forge?: ForgeState; local?: LocalState; polling: PollStatus };
+// a lite view carries only polling and the runs in flight or just finished, what a pane draws its ci from
+export type RepoView = { forge?: ForgeState; local?: LocalState; polling: PollStatus; runs?: Run[] };
 
 export type PollStatus = {
   active: boolean;
