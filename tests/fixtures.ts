@@ -37,5 +37,5 @@ export function run(id: number, over: Partial<Run> = {}): Run {
 }
 
 export function forge(over: Partial<ForgeState> = {}): ForgeState {
-  return { repo: 'o/r', defaultBranch: 'dev', issues: [], pulls: [], runs: [], polledAt: T0, ...over };
+  return { repo: 'o/r', defaultBranch: 'dev', issues: [], pulls: [], runs: [], children: {}, polledAt: T0, ...over };
 }

@@ -16,7 +16,7 @@ The prompt names an issue (`owner/name#n`), optionally followed by context from 
 
    Only now, if the issue cannot be implemented as written (it is not implementable as stated, it is blocked by other work, or it leaves a decision open), stop and ask (see Stopping). The draft stays open while you wait, so the work still reads as active.
 4. **Find the code.** Search for what the issue names, read it and what it depends on, and widen only as needed.
-5. **Plan the whole change.** Check the plan against every acceptance item yourself: a plan that misses one is fixed before any code is written. A decision the issue does not make, or something the plan adds that the issue does not ask, is kept and listed in the PR body, and reported in `choices` on your next report. Put the plan in the PR body, briefly.
+5. **Plan the whole change.** Check the plan against every acceptance item yourself: a plan that misses one is fixed before any code is written. A decision the issue does not make, or something the plan adds that the issue does not ask, is kept and listed in the PR body, and reported in `choices` on your next report. Put the plan in the PR body, briefly, and report it: call `report` with state `working` and `plan` set to its steps, each a short line with `done: false`. From then on, send the whole plan again with a step marked `done` each time one is finished, so the live view shows how far along you are. Steps are the units of the change ("parse the new field", "thread it through the ledger", "tests"), not the procedure above.
 6. **Implement the whole change in one pass** before running anything. Commit in the repository's format, small and self-contained, and check each message against its rules before pushing. On the first push of real work, drop the empty start commit: `git rebase --onto <start commit>^ <start commit>`, then `git push --force-with-lease`. Do it before the branch has merged the integration branch, while the branch is still a plain line of your own commits. This is the only history rewrite allowed. Once the branch carries a merge, the start commit stays.
 7. **Check locally, sparingly** (see Testing): build once, run the tests that cover what you changed, fix what fails, push. CI runs everything else. Before every push, including fix-up pushes, run the repository's formatter check on every project you touched, subprojects included. A root-level check does not reach a subproject with its own manifest.
 8. **Check the PR.** It links its issue, targets the integration branch, follows the branch and commit conventions and the PR template, and is up to date with the integration branch (merge or rebase, as the repository's conventions say). Then review your own diff against the issue. Every hunk serves the issue and nothing patches a symptom. State any exception in the PR body.
@@ -26,7 +26,7 @@ The prompt names an issue (`owner/name#n`), optionally followed by context from 
    - A check that never finished (a `ci stalled` delivery): stop and ask.
 
    Repeat until green.
-10. **Report.** Call `report` with state `ready` and a one-line note, then write your final message. Keep the worktree and local branch. They hold the build, and the PR may need updating before it merges. Whoever merges the PR removes them.
+10. **Report.** Call `report` with state `ready`, every plan step marked done, and a one-line note, then write your final message. Keep the worktree and local branch. They hold the build, and the PR may need updating before it merges. Whoever merges the PR removes them.
 
 ## Resuming
 

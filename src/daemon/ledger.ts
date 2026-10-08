@@ -1,6 +1,6 @@
 import type { ClaimBody, DecisionBody, QueueBody, RegisterBody, ReportBody, SubscribeBody } from '../core/protocol.ts';
 import { workKey } from '../core/protocol.ts';
-import type { AgentRecord, Answer, Decision, HelmEvent, Letter, Session, SessionRole, Subscription, Work } from '../core/types.ts';
+import type { AgentRecord, Answer, Decision, HelmEvent, Letter, Phase, Session, SessionRole, Subscription, Work } from '../core/types.ts';
 
 // bumped when the stored shape changes; an older file is migrated or refused, never read as this one
 export const LEDGER_VERSION = 1;
@@ -32,7 +32,9 @@ const EVENT_LOG = 300;
 // answered, dismissed and resolved decisions are kept this long for the record, then dropped
 const DECISION_KEEP_MS = 7 * 24 * 3600_000;
 // finished work stays visible this long
-const WORK_KEEP_MS = 3 * 24 * 3600_000;
+const WORK_KEEP_MS = 30 * 24 * 3600_000;
+// phase changes kept per work item
+const HISTORY_KEEP = 60;
 // a session gone this long is forgotten, with its subscriptions and letters
 const SESSION_KEEP_MS = 7 * 24 * 3600_000;
 
@@ -204,6 +206,7 @@ export class Ledger {
     const now = this.now();
     w.report = { state: b.state, at: now, ...(b.note ? { note: b.note } : {}) };
     if (b.agent && !w.agent) w.agent = b.agent;
+    if (b.plan) w.plan = b.plan.map((s) => ({ text: s.text, done: s.done }));
     w.updatedAt = now;
     if (b.state === 'abandoned') w.finished = { at: now, how: 'abandoned' };
     const from = { session: b.session, ...(b.agent ? { agent: b.agent } : {}) };
@@ -245,6 +248,17 @@ export class Ledger {
   }
 
   // the forge says an issue's work is over
+  // notes the phase a work item is in now, when it is not the one it was last seen in
+  phase(repo: string, issue: number, phase: Phase): void {
+    const w = this.data.work[workKey(repo, issue)];
+    if (!w) return;
+    const history = (w.history ??= []);
+    if (history.at(-1)?.phase === phase) return;
+    history.push({ phase, at: this.now() });
+    if (history.length > HISTORY_KEEP) history.splice(0, history.length - HISTORY_KEEP);
+    this.changed();
+  }
+
   finish(repo: string, issue: number, how: 'merged' | 'closed'): Work | undefined {
     const w = this.data.work[workKey(repo, issue)];
     if (!w || w.finished) return undefined;

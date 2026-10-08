@@ -7,13 +7,13 @@ It is built for one way of working: a coordinator session, a session per reposit
 ## Install
 
 ```
-/plugin install helm --marketplace octalide/helm
+/plugin install helm --marketplace octalide/helm@main
 ```
 
 or from a shell:
 
 ```sh
-claude plugin marketplace add octalide/helm
+claude plugin marketplace add octalide/helm@main
 claude plugin install helm@helm
 ```
 
@@ -44,18 +44,18 @@ local git (worktrees, branches) ─┤
 A session in a repository is a **repo** session for it. Set the role with `HELM_ROLE=coordinator|repo|other` at launch, or with `/helm role coordinator`.
 
 - **Repo session.** Owns a repository's issues. It queues them with `backlog`, starts agents with `dispatch`, and hears its own work move (`[helm work]` deliveries) without polling.
-- **Coordinator.** Sees the fleet (`view` with `what: fleet`), hears every phase change and decision, and talks to repository sessions with SendMessage.
-- **Issue agent.** Started only by `dispatch`. It reports as it goes, waits on CI by subscribing and ending its turn, and stops with a question that lands in the decision inbox. The answer resumes it.
+- **Coordinator.** Sees the fleet (`view` with `what: fleet` or `what: tree`), hears each epic's progress, every decision and any work that needs someone, and talks to repository sessions with SendMessage.
+- **Issue agent.** Started only by `dispatch`. It reports as it goes, its plan with each step's progress among it, waits on CI by subscribing and ending its turn, and stops with a question that lands in the decision inbox. The answer resumes it.
 
 ## Tools
 
 | tool | does |
 |---|---|
 | `status` | this session's role, work, open decisions, subscriptions and letters in flight |
-| `view` | work, fleet, issues, issue, prs, pr (with live jobs), runs, worktrees, branches, decisions, sessions, from the shared cache |
+| `view` | work, fleet, tree (epics and sub-issues with progress rolled up), issues, issue, prs, pr (with live jobs), runs, worktrees, branches, decisions, sessions, from the shared cache |
 | `log` | a CI job's log trimmed to its errors, a grep or a tail; or every failed job of a run |
 | `watch` | subscribe to a repository, issue, PR, branch, run or tag. A subagent's subscription delivers to that subagent |
-| `report` | where an agent's work stands: working (claims the issue), waiting, blocked with a question, ready, stopped, abandoned, plus choices made without the person |
+| `report` | where an agent's work stands: working (claims the issue), waiting, blocked with a question, ready, stopped, abandoned, plus its plan and choices made without the person |
 | `dispatch` | start an issue agent per issue: claim, route to a tier, spawn, log the pick |
 | `backlog` | the session's queue of issues |
 | `decide` | list, answer or dismiss decisions |
@@ -71,6 +71,12 @@ CI arrives as one verdict per PR head (`ci settled success` or `failure`, naming
 ## Phases
 
 Work moves through `queued → working → draft → ci → ready → done`, with `failing`, `blocked` and `stalled` beside them. Phases are derived, not set: from the agent's reports, whether its agent is alive, the PR that closes the issue or sits on its branch, and that PR's checks. A stalled item (no live agent, work not done) and a stalled or failing CI raise a decision on their own, and clear it once the condition passes.
+
+## Hierarchy
+
+GitHub's sub-issues draw the tree. Every open issue with sub-issues that no other issue in a watched repository holds is a root epic, and each node joins its work item: phase, agent, tier and plan progress. Sub-issues in other repositories nest under their parent, and a sub-epic in a repository helm does not poll is counted from its summary. Each epic rolls up its leaves: done, active, in CI, needing attention, queued and unowned. Sub-issues are read again only when their parent moved, or every 10 minutes.
+
+Each work item keeps when it entered each phase, and finished work stays 30 days, so the page can draw a timeline. A coordinator hears an epic as one `[helm epic]` delivery each time its rollup moves, carrying the changes under it, instead of every child's phase change. Work that needs someone still arrives at once.
 
 ## Routing
 

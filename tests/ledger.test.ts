@@ -29,6 +29,19 @@ describe('ledger', () => {
     expect(l.claim({ session: 'B', repo: 'o/r', issue: 1, force: true }, undefined).owner).toBe('B');
   });
 
+  it('keeps the reported plan and each phase change once', () => {
+    const { l, tick } = ledger();
+    l.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    l.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'x' }, 'one');
+    l.report({ session: 'A', agent: 'x', repo: 'o/r', issue: 1, state: 'working', plan: [{ text: 'a', done: true }, { text: 'b', done: false }] });
+    expect(l.data.work['o/r#1']!.plan).toEqual([{ text: 'a', done: true }, { text: 'b', done: false }]);
+    l.phase('o/r', 1, 'working');
+    tick(1000);
+    l.phase('o/r', 1, 'working');
+    l.phase('o/r', 1, 'ci');
+    expect(l.data.work['o/r#1']!.history).toEqual([{ phase: 'working', at: T0 }, { phase: 'ci', at: T0 + 1000 }]);
+  });
+
   it('hands a letter out once', () => {
     const { l } = ledger();
     const letter = l.post({ session: 'A', text: 'hi', events: [], subs: [] });
