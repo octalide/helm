@@ -259,10 +259,11 @@ export class Ledger {
     this.changed();
   }
 
-  finish(repo: string, issue: number, how: 'merged' | 'closed'): Work | undefined {
+  // at is when it finished, when that was before now: a close helm learns of late
+  finish(repo: string, issue: number, how: 'merged' | 'closed', at = this.now()): Work | undefined {
     const w = this.data.work[workKey(repo, issue)];
     if (!w || w.finished) return undefined;
-    w.finished = { at: this.now(), how };
+    w.finished = { at: Math.min(at, this.now()), how };
     w.updatedAt = this.now();
     this.changed();
     return w;
