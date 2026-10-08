@@ -1,5 +1,6 @@
 import { isDone, isPassing, verdictOf } from '../core/checks.ts';
 import { rollupText } from '../core/tree.ts';
+import { selfWorked } from '../core/work.ts';
 import type { Branch, Check, Decision, Fleet, ForgeState, Issue, Job, LocalState, Pull, Run, Session, Subscription, TreeNode, Worktree, WorkView } from '../core/types.ts';
 
 export function ago(ms: number, now: number): string {
@@ -37,7 +38,7 @@ export function jobLines(jobs: readonly Job[]): string[] {
 
 export function workLine(v: WorkView, home?: string): string {
   const parts = [
-    v.agent ? `agent ${v.agent} ${v.agentStatus ?? '?'}` : 'no agent',
+    v.agent ? `agent ${v.agent} ${v.agentStatus ?? '?'}` : selfWorked(v) ? 'worked by its session' : 'no agent',
     v.routing ? `${v.routing.tier ?? ''}${v.routing.tier ? ' ' : ''}${v.routing.model}/${v.routing.effort}` : '',
     v.plan?.length ? `plan ${v.plan.filter((p) => p.done).length}/${v.plan.length}` : '',
     v.pull ? `pr #${v.pull.number}${v.pull.draft ? ' draft' : ''}` : '',
