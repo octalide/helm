@@ -243,6 +243,8 @@ export type Rollup = {
   // blocked, failing or stalled
   attention: number;
   ci: number;
+  // ready to merge, also counted active
+  ready: number;
   queued: number;
   // open with nobody on it
   unowned: number;

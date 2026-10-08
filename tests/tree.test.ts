@@ -16,7 +16,7 @@ describe('tree', () => {
     });
     const [root, ...rest] = buildTree([f], [work('o/r', 2, 'ci', { plan: [{ text: 'a', done: true }, { text: 'b', done: false }] }), work('o/r', 3, 'blocked')]);
     expect(rest).toEqual([]);
-    expect(root!.rollup).toEqual({ total: 4, done: 1, active: 1, attention: 1, ci: 1, queued: 0, unowned: 1 });
+    expect(root!.rollup).toEqual({ total: 4, done: 1, active: 1, attention: 1, ci: 1, ready: 0, queued: 0, unowned: 1 });
     expect(percent(root!.rollup)).toBe(25);
     expect(root!.children.map((c) => c.phase)).toEqual(['ci', 'blocked', undefined, 'done']);
     expect(root!.children[0]!.plan).toEqual({ done: 1, total: 2 });
@@ -54,6 +54,10 @@ describe('tree', () => {
     expect(same.events).toEqual([]);
     const change = { id: 'w', kind: 'work' as const, repo: 'o/r', issue: 2, at: T0, tags: ['phase', 'ready'], text: 'o/r#2 working → ready: w2' };
     const moved = epicEvents(buildTree([f], [work('o/r', 2, 'ready'), work('o/r', 3, 'queued')]), first.seen, [change], T0);
-    expect(moved.events.map((e) => [e.text, e.detail])).toEqual([['o/r#1 0%: issue 1', ['0/2 done (0%) · 1 active · 1 queued', 'o/r#2 working → ready: w2']]]);
+    expect(moved.events.map((e) => [e.text, e.detail])).toEqual([['o/r#1 0%: issue 1', ['0/2 done (0%) · 1 active · 1 ready · 1 queued', 'o/r#2 working → ready: w2']]]);
+    // a move that leaves every count where it was is still heard
+    const draft = { ...change, tags: ['phase', 'draft'], text: 'o/r#2 working → draft: w2' };
+    const quiet = epicEvents(buildTree([f], [work('o/r', 2, 'draft')]), same.seen, [draft], T0);
+    expect(quiet.events.map((e) => e.detail?.at(-1))).toEqual(['o/r#2 working → draft: w2']);
   });
 });
