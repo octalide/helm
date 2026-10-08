@@ -8,37 +8,27 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header class="top">
-  <div class="brand"><span class="mark" aria-hidden="true"></span>helm</div>
-  <div class="summary" id="summary"></div>
-  <div class="conn" id="conn" title="connection to helmd">connecting</div>
-</header>
-<main>
-  <section class="panel" id="inbox-panel">
-    <h2>Decisions <span class="count" id="inbox-count"></span></h2>
-    <div id="inbox" class="cards"></div>
-    <details class="history"><summary>Settled</summary><div id="settled" class="list"></div></details>
-  </section>
-  <section class="panel" id="work-panel">
-    <h2>Active work <span class="count" id="work-count"></span></h2>
-    <div id="work"></div>
-  </section>
-  <section class="panel two">
-    <div>
-      <h2>Repositories</h2>
-      <nav class="tabs" id="repo-tabs"></nav>
-      <nav class="tabs sub" id="repo-views"></nav>
-      <div id="repo" class="list"></div>
-    </div>
-    <div>
-      <h2>Activity</h2>
-      <div id="events" class="list feed"></div>
-      <h2>Sessions</h2>
-      <div id="sessions" class="list"></div>
-    </div>
-  </section>
-</main>
+<aside class="side">
+  <a class="brand" href="#/overview"><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="8" fill="none" stroke="currentColor" stroke-width="3"/><path d="M16 2v8M16 22v8M2 16h8M22 16h8" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg><span>helm</span></a>
+  <nav id="nav" aria-label="views"></nav>
+  <div class="side-foot">
+    <button type="button" id="pal-open" class="quiet" title="command palette (ctrl k)"><kbd>ctrl k</kbd></button>
+    <button type="button" id="theme" class="quiet" aria-label="toggle theme">◐</button>
+  </div>
+</aside>
+<div class="page">
+  <header class="top">
+    <h1 id="view-title"></h1>
+    <div class="summary" id="summary"></div>
+    <div class="conn" id="conn">connecting</div>
+  </header>
+  <div class="filters" id="filters" role="search"></div>
+  <main id="main"></main>
+</div>
+<aside id="drawer" class="drawer" hidden aria-label="work detail"></aside>
 <dialog id="log"><form method="dialog"><header><span id="log-title"></span><button aria-label="close">✕</button></header><pre id="log-body"></pre></form></dialog>
-<script src="app.js"></script>
+<dialog id="palette" class="palette" aria-label="command palette"><input id="pal-input" type="text" placeholder="Jump to a view, issue, epic, repository or session" autocomplete="off" spellcheck="false"><ul id="pal-list" role="listbox"></ul></dialog>
+<dialog id="keys" class="keys"><form method="dialog"><header><span>Keys</span><button aria-label="close">✕</button></header><div id="keys-list"></div></form></dialog>
+<script type="module" src="main.js"></script>
 </body>
 </html>
