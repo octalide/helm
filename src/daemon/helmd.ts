@@ -7,7 +7,7 @@ import type { HelmPaths } from '../core/paths.ts';
 import type { AgentRecord, Decision, Fleet, ForgeState, HelmEvent, Letter, LocalState, Phase, PollStatus, RepoName, RepoView, Session, SessionRole, Subscription, TreeNode, WorkView } from '../core/types.ts';
 import { route } from './deliver.ts';
 import { buildTree } from '../core/tree.ts';
-import { selfWorked } from '../core/work.ts';
+import { hasWorker, selfWorked } from '../core/work.ts';
 import { pullFor, viewOf } from './derive.ts';
 import { epicEvents, rootsOf } from './epics.ts';
 import type { GitHub } from './github.ts';
@@ -121,7 +121,7 @@ export class Daemon {
   private active(repo: RepoName): boolean {
     if (this.pollers.get(repo)?.busy()) return true;
     const d = this.ledger.data;
-    if (Object.values(d.work).some((w) => w.repo === repo && !w.finished && w.agent)) return true;
+    if (Object.values(d.work).some((w) => w.repo === repo && !w.finished && hasWorker(w))) return true;
     return Object.values(d.subscriptions).some((s) => s.repo === repo && s.scope.kind !== 'repo');
   }
 

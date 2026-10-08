@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { hasWorker } from '../src/core/work.ts';
 import { phaseOf, viewOf } from '../src/daemon/derive.ts';
 import { ClaimError, emptyLedger, Ledger } from '../src/daemon/ledger.ts';
 import { check, forge, pull, T0 } from './fixtures.ts';
@@ -92,6 +93,8 @@ describe('phase', () => {
     expect(phaseOf(self, { ownerLive: true, pull: pull(101, { draft: true }), blocking: false, issueClosed: false })).toBe('draft');
     expect(phaseOf(self, { ownerLive: false, pull: pull(101, { draft: true }), blocking: false, issueClosed: false })).toBe('stalled');
     expect(phaseOf({ ...w, owner: 'A' }, { ownerLive: true, blocking: false, issueClosed: false })).toBe('queued');
+    // a repository with such work polls as active
+    expect([hasWorker(self), hasWorker({ ...w, agent: 'x' }), hasWorker({ ...w, owner: 'A' })]).toEqual([true, true, false]);
   });
 
   it('finds the pr by closing reference or branch and the worktree by branch', () => {
