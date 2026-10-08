@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- Work that finished while helm was not watching is marked finished, dated when it closed, and work whose PR merged finishes as merged (#31).
+- A PR subscription whose PR ended while helm was not watching retires (#33).
+
 ## 0.2.0
 
 Hierarchy and dashboards.
