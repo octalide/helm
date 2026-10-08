@@ -1,3 +1,130 @@
 # helm
 
-Active-work tracking for Claude Code fleets: issues, pull requests, CI, worktrees and branches across repositories, a ledger of which session and agent owns which issue, event delivery to agents, and a live view for the person steering it.
+Active-work tracking for Claude Code fleets. helm watches GitHub and your local checkouts, keeps a ledger of which session and agent owns which issue, delivers repository events to the agent that asked for them, routes each issue to a model and effort, and shows all of it live, in the terminal and on a local web page with a decision inbox.
+
+It is built for one way of working: a coordinator session, a session per repository that owns that repository's issues, and an issue agent per issue spawned by the repository session. Every piece is useful on its own too.
+
+## Install
+
+```
+/plugin install helm --marketplace octalide/helm
+```
+
+or from a shell:
+
+```sh
+claude plugin marketplace add octalide/helm
+claude plugin install helm@helm
+```
+
+helm is a function-hook plugin, which is early access. Turn on `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` in the `env` block of `settings.json`. It needs `node` 24 or newer and `gh` logged in (`gh auth login`). helmd uses the token gh holds and keeps none of its own.
+
+## How it fits together
+
+```
+GitHub ──(etag probes, graphql)──┐
+local git (worktrees, branches) ─┤
+                                 ▼
+                       helmd (one per user)
+                 forge cache · ledger · subscriptions
+                   │ unix socket          │ 127.0.0.1:7468
+       ┌───────────┼───────────┐          ▼
+   session      session     session    web page
+ (coordinator)  (repo A)    (repo B)   live fleet, decision inbox
+                  │ dispatch
+            issue agents ── report, watch, view, log
+```
+
+**helmd** is the only process that talks to GitHub. The first session to need it starts it, and a session running a newer helm replaces an older one. It polls each repository in use: those a live session works in, those with unfinished work or a subscription, and any a tool asked about lately. Two conditional probes per poll cost nothing when nothing moved, and the snapshot (open and recent issues and PRs, every check on each PR head, last comment and review) is read only when a probe moved. Active repositories poll every 20 s, the rest every 3 minutes. Jobs and their steps are read live while a run is in flight. Everything helmd holds survives a restart.
+
+**The mod** binds each session to helmd. It registers the session and its agents, streams the session's deliveries, serves the tools, draws the pane, and tells repository and coordinator sessions how to work with helm through a section of their system prompt, so no instruction file has to.
+
+## Roles
+
+A session in a repository is a **repo** session for it. Set the role with `HELM_ROLE=coordinator|repo|other` at launch, or with `/helm role coordinator`.
+
+- **Repo session.** Owns a repository's issues. It queues them with `backlog`, starts agents with `dispatch`, and hears its own work move (`[helm work]` deliveries) without polling.
+- **Coordinator.** Sees the fleet (`view` with `what: fleet`), hears every phase change and decision, and talks to repository sessions with SendMessage.
+- **Issue agent.** Started only by `dispatch`. It reports as it goes, waits on CI by subscribing and ending its turn, and stops with a question that lands in the decision inbox. The answer resumes it.
+
+## Tools
+
+| tool | does |
+|---|---|
+| `status` | this session's role, work, open decisions, subscriptions and letters in flight |
+| `view` | work, fleet, issues, issue, prs, pr (with live jobs), runs, worktrees, branches, decisions, sessions, from the shared cache |
+| `log` | a CI job's log trimmed to its errors, a grep or a tail; or every failed job of a run |
+| `watch` | subscribe to a repository, issue, PR, branch, run or tag. A subagent's subscription delivers to that subagent |
+| `report` | where an agent's work stands: working (claims the issue), waiting, blocked with a question, ready, stopped, abandoned, plus choices made without the person |
+| `dispatch` | start an issue agent per issue: claim, route to a tier, spawn, log the pick |
+| `backlog` | the session's queue of issues |
+| `decide` | list, answer or dismiss decisions |
+
+`/helm` shows the session's binding, and `/helm pane`, `/helm web`, `/helm role …` and `/helm restart` do what they say.
+
+## Delivery
+
+Events reach whoever subscribed. A letter for the main loop rides the next tool result while a turn runs, or starts a turn when the session is idle. A letter for a subagent rides that agent's next tool call. After 60 s without one, or once the agent has ended its turn, it goes as a message that resumes the agent. If the engine refuses the message, the letter is relayed to the main loop and the agent's subscriptions are retired. helmd hands each letter out once.
+
+CI arrives as one verdict per PR head (`ci settled success` or `failure`, naming each failed check with the run to read), one stall notice when checks have not finished within an hour, and run completions on branches and tags.
+
+## Phases
+
+Work moves through `queued → working → draft → ci → ready → done`, with `failing`, `blocked` and `stalled` beside them. Phases are derived, not set: from the agent's reports, whether its agent is alive, the PR that closes the issue or sits on its branch, and that PR's checks. A stalled item (no live agent, work not done) and a stalled or failing CI raise a decision on their own, and clear it once the condition passes.
+
+## Routing
+
+`dispatch` sends each issue to a **tier**: a model and an effort with a description of the work that belongs there. The judge (`claude-haiku-5-5` by default) reads the issue against the tiers and answers a tier, a confidence and a reason. Each pick is logged as a decision for review, and answering it with another tier reroutes the issue. Name a tier in `dispatch` to skip the judge.
+
+The default tiers:
+
+| tier | model | effort | for |
+|---|---|---|---|
+| mechanical | claude-sonnet-5-5 | low | version bumps, pattern-following additions, renames, docs, one-file fixes with a stated cause |
+| standard | claude-opus-5-5 | medium | ordinary work in one subsystem with clear acceptance |
+| deep | claude-opus-5-5 | high | cross-subsystem or contract changes, codegen, concurrency, unknown root causes |
+| frontier | claude-fable-5-1 | high | design-heavy or research-grade work, or what earlier attempts failed on |
+
+## Web page
+
+`http://127.0.0.1:7468/`. Decisions come first: questions agents are stopped on, choices they made without you, routing picks and stalls, each answered or dismissed in place. Then active work by session (phase, model, PR, CI progress, running and failed jobs with their logs), each repository's PRs, issues, runs, worktrees and branches, the activity feed and the live sessions. It updates live.
+
+The page is served on 127.0.0.1 only. A request must name this server as its Host, and a write must come from this page.
+
+## Config
+
+`~/.config/helm/config.json`, every field optional:
+
+```json
+{
+  "roots": ["~/dev/src"],
+  "repos": ["owner/name"],
+  "web": { "port": 7468 },
+  "poll": { "active": 20, "idle": 180, "local": 15, "stallHours": 1, "goneSeconds": 120 },
+  "routing": { "judge": "claude-haiku-5-5", "review": 0.7, "fallback": "standard", "tiers": [ ... ] }
+}
+```
+
+`roots` are searched for checkouts by their `origin` remote. `repos` are polled whether or not anything references them. `routing.tiers` replaces the table whole. A repository can set its own `routing` in `.helm/config.json`.
+
+State lives under `$XDG_STATE_HOME/helm` and the socket under `$XDG_RUNTIME_DIR/helm`. `HELM_HOME` puts everything under one directory, which is how a second daemon runs beside the real one.
+
+## helmd
+
+```
+helmd start | stop | restart | status | serve | stream <session> | version
+```
+
+`bin/helmd` runs it from a checkout. Sessions start it on their own.
+
+## Development
+
+```sh
+npm ci
+npm run typecheck
+npm test
+claude plugin validate .
+claude --plugin-dir .
+```
+
+The engine follows `$` into the hooks module alone, so everything that reaches the engine is in `hooks/helm.tsx`. Logic lives in plain modules under `src/mod` (the session side), `src/daemon` (helmd) and `src/core` (the contract both sides share).

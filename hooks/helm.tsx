@@ -24,6 +24,16 @@ const PANE = 'helm';
 
 // the fleet itself stays in the module, since the state contract holds only self-contained data; the atom is the
 // stamp that tells a drawing to read it again
+// the role prompts, read at session start: the coordinator's, and the repository session's with {{repo}} in it
+let rolePrompts: { coordinator: string; repo: string } | undefined;
+
+function rolePrompt(r: Runtime): string | undefined {
+  if (!rolePrompts) return undefined;
+  if (r.role === 'coordinator') return rolePrompts.coordinator;
+  if (r.role === 'repo') return rolePrompts.repo.replaceAll('{{repo}}', r.repo ?? 'its repository');
+  return undefined;
+}
+
 const fleetAt = atom({ plugin: 'helm', key: 'fleetAt' } as const, 0);
 let fleet: Fleet | undefined;
 
@@ -224,6 +234,7 @@ export const register: Register = (on) => {
       rt.mailbox.stop();
     }
     const client = await clientFor($);
+    rolePrompts = { coordinator: await $.fs.read(`${$.plugin.root}/prompts/coordinator.md`), repo: await $.fs.read(`${$.plugin.root}/prompts/repo.md`) };
     const version = (JSON.parse(await $.fs.read(`${$.plugin.root}/package.json`)) as { version: string }).version;
     const repo = await sessionRepo($);
     const asked = (await $.env.get('HELM_ROLE')) as SessionRole | undefined;
@@ -322,6 +333,13 @@ export const register: Register = (on) => {
       }
     }).catch(() => ({ deny: `helm ${t.name} failed inside its hook` }));
   }
+
+  // a repository session and a coordinator each read how helm works in their role, so no instruction file has to
+  on('prompt.compose', async ($, e, next) => {
+    const out = await next(e);
+    const text = rt ? rolePrompt(rt) : undefined;
+    return text ? { sections: [...out.sections, { id: `${PLUGIN}:role`, text, scope: 'session' as const }] } : out;
+  });
 
   // issue agents start through dispatch, which claims and routes them; the model never picks one itself
   on('agent.offer', ($, e, next) => (e.agent.startsWith(`${PLUGIN}:issue-`) ? { isOffered: false } : next(e))).catch(($, e, next) => next(e));
