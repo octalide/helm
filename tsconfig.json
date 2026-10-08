@@ -13,5 +13,5 @@
     "erasableSyntaxOnly": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src/core", "src/daemon", "tests"]
+  "include": ["src/core", "src/daemon", "src/mod", "tests"]
 }

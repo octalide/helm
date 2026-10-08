@@ -12,7 +12,7 @@
     "helmd": "./bin/helmd"
   },
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.mod.json",
     "test": "vitest run",
     "validate": "claude plugin validate ."
   },

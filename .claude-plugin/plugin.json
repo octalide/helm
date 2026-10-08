@@ -1,0 +1,7 @@
+{
+  "name": "helm",
+  "version": "0.1.0",
+  "description": "Active-work tracking for Claude Code fleets: forge state, a work ledger of who owns which issue, event delivery to agents, model routing per issue, and a live view with a decision inbox.",
+  "author": { "name": "octalide" },
+  "license": "MIT"
+}
