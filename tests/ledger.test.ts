@@ -86,6 +86,14 @@ describe('phase', () => {
     expect(phaseOf(a, { agent: 'gone', blocking: false, issueClosed: false })).toBe('stalled');
   });
 
+  it('counts a live session working an issue itself as its worker', () => {
+    const self = { ...w, owner: 'A', report: { state: 'working' as const, at: T0 } };
+    expect(phaseOf(self, { ownerLive: true, blocking: false, issueClosed: false })).toBe('working');
+    expect(phaseOf(self, { ownerLive: true, pull: pull(101, { draft: true }), blocking: false, issueClosed: false })).toBe('draft');
+    expect(phaseOf(self, { ownerLive: false, pull: pull(101, { draft: true }), blocking: false, issueClosed: false })).toBe('stalled');
+    expect(phaseOf({ ...w, owner: 'A' }, { ownerLive: true, blocking: false, issueClosed: false })).toBe('queued');
+  });
+
   it('finds the pr by closing reference or branch and the worktree by branch', () => {
     const f = forge({ pulls: [pull(101, { closes: [], head: 'fix/1' })] });
     const local = { repo: 'o/r', checkouts: ['/r'], worktrees: [{ path: '/r/wt', branch: 'fix/1', sha: '', main: false, dirty: 2 }], branches: [], scannedAt: T0 };

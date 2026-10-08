@@ -7,6 +7,7 @@ import type { HelmPaths } from '../core/paths.ts';
 import type { AgentRecord, Decision, Fleet, ForgeState, HelmEvent, Letter, LocalState, Phase, PollStatus, RepoName, RepoView, Session, SessionRole, Subscription, TreeNode, WorkView } from '../core/types.ts';
 import { route } from './deliver.ts';
 import { buildTree } from '../core/tree.ts';
+import { selfWorked } from '../core/work.ts';
 import { pullFor, viewOf } from './derive.ts';
 import { epicEvents, rootsOf } from './epics.ts';
 import type { GitHub } from './github.ts';
@@ -340,7 +341,7 @@ export class Daemon {
         tags: ['phase', v.phase],
         text: `${key} ${was ?? 'new'} → ${v.phase}: ${v.title}`,
         detail: [
-          [v.agent ? `agent ${v.agent} (${v.agentStatus ?? '?'})` : 'no agent', v.routing ? `${v.routing.model}/${v.routing.effort}` : '', v.pull ? `pr #${v.pull.number}` : '', v.verdict !== 'none' ? `ci ${v.verdict}` : '']
+          [v.agent ? `agent ${v.agent} (${v.agentStatus ?? '?'})` : selfWorked(v) ? 'worked by its session' : 'no agent', v.routing ? `${v.routing.model}/${v.routing.effort}` : '', v.pull ? `pr #${v.pull.number}` : '', v.verdict !== 'none' ? `ci ${v.verdict}` : '']
             .filter(Boolean)
             .join(' · '),
           ...(v.report?.note ? [`report: ${v.report.note}`] : []),
