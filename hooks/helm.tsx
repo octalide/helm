@@ -2,10 +2,9 @@ import type { EngineInterface, Register } from 'claude-code';
 import { helmPaths, type PathEnv } from '../src/core/paths.ts';
 import { PROTOCOL, type StreamFrame } from '../src/core/protocol.ts';
 import { compareVersions, isRepoName, repoOfRemote } from '../src/core/repo.ts';
-import type { AgentRecord, AgentStatus, RepoName, SessionRole } from '../src/core/types.ts';
-import { EFFORTS } from '../src/core/types.ts';
+import type { AgentRecord, AgentStatus, Effort, RepoName, SessionRole } from '../src/core/types.ts';
 import { HelmClient, HelmError } from '../src/mod/client.ts';
-import { type DispatchPort, dispatchTool, issueAgent } from '../src/mod/dispatch.ts';
+import { type DispatchPort, dispatchTool, issueAgentName } from '../src/mod/dispatch.ts';
 import { Mailbox } from '../src/mod/mailbox.ts';
 import { type Tool, TOOLS } from '../src/mod/tools.ts';
 import { PLUGIN, ROLES, type Runtime, toolEnv } from './runtime.ts';
@@ -76,9 +75,37 @@ async function bind($: $, r: Runtime): Promise<void> {
   await r.client.register({ id: r.session, cwd: await $.session.cwd(), role: r.role, ...(r.repo ? { repo: r.repo } : {}) });
 }
 
+// issue agent types registered by this load of the module, by name
+const issueTypes = new Set<string>();
+let issuePrompt: string | undefined;
+
+async function issueAgentType($: $, model: string, effort: Effort): Promise<string> {
+  const name = issueAgentName(model, effort);
+  if (!issueTypes.has(name)) {
+    issuePrompt ??= await $.fs.read(`${$.plugin.root}/prompts/issue.md`);
+    await $.agent.register({
+      name,
+      description: `Implements one GitHub issue to a merge-ready PR on ${model} at ${effort} effort. Started by helm dispatch only.`,
+      prompt: issuePrompt,
+      model,
+      effort,
+      disallowedTools: ['AskUserQuestion'],
+    });
+    issueTypes.add(name);
+  }
+  return `${PLUGIN}:${name}`;
+}
+
+// every tier this session can route to, registered up front so a dispatch in its first turn finds them
+async function registerTiers($: $, client: HelmClient, repo: RepoName | undefined): Promise<void> {
+  const { routing } = await client.config(repo);
+  for (const t of routing.tiers) await issueAgentType($, t.model, t.effort);
+}
+
 function port($: $): Port {
   return {
     now: Date.now,
+    agentType: (model, effort) => issueAgentType($, model, effort),
     spawn: async (a) => {
       const r = await $.agent.spawn(a);
       return r.deny !== undefined ? { deny: r.deny } : r.agentId ? { agentId: r.agentId } : {};
@@ -88,19 +115,6 @@ function port($: $): Port {
       return r.isAnswered ? { text: r.text } : { failed: r.reason };
     },
   };
-}
-
-async function registerIssueAgents($: $): Promise<void> {
-  const prompt = await $.fs.read(`${$.plugin.root}/prompts/issue.md`);
-  for (const effort of EFFORTS) {
-    await $.agent.register({
-      name: issueAgent(PLUGIN, effort).split(':')[1]!,
-      description: `Implements one GitHub issue to a merge-ready PR at ${effort} effort. Started by helm dispatch only.`,
-      prompt,
-      effort,
-      disallowedTools: ['AskUserQuestion'],
-    });
-  }
 }
 
 // letters and change notices from helmd, for the life of this module; reconnects whenever helmd goes away
@@ -148,7 +162,7 @@ async function helpText(r: Runtime): Promise<string> {
 }
 
 export const register: Register = (on) => {
-  const tools: Tool<Port>[] = [...TOOLS, dispatchTool(PLUGIN)];
+  const tools: Tool<Port>[] = [...TOOLS, dispatchTool()];
 
   // outermost on every tool: letters waiting for the calling loop ride the result
   on('tool.call', async ($, e, next) => {
@@ -197,10 +211,11 @@ export const register: Register = (on) => {
 
     for (const t of tools) await $.tool.register({ name: t.name, description: t.description, inputSchema: t.inputSchema, isDeferred: !t.eager });
     await $.command.register({ name: PLUGIN, description: 'helm: status, role, web page' });
-    await registerIssueAgents($).catch((err: Error) => $.ui.log(`helm: issue agents not registered: ${err.message}`));
     try {
       await ensureDaemon($, client, version);
       await bind($, r);
+      issueTypes.clear();
+      await registerTiers($, client, repo).catch((err: Error) => $.ui.log(`helm: issue agents not registered: ${err.message}`));
     } catch (err) {
       $.ui.log(`helm: ${(err as Error).message}`);
     }

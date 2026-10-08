@@ -7,17 +7,22 @@ import type { Tool, ToolEnv } from './tools.ts';
 
 // what dispatch needs of the engine, built by the hooks module
 export type DispatchPort = {
-  spawn: (a: { subagentType: string; model: string; description: string; prompt: string }) => Promise<{ agentId?: string; deny?: string }>;
+  // the issue agent type for one model at one effort, registered on first use
+  agentType: (model: string, effort: Effort) => Promise<string>;
+  spawn: (a: { subagentType: string; description: string; prompt: string }) => Promise<{ agentId?: string; deny?: string }>;
   complete: (a: { model: string; prompt: string }) => Promise<{ text: string } | { failed: string }>;
   now: () => number;
 };
 
 export type DispatchInput = { repo?: RepoName; issues: number[]; tier?: string; context?: string };
 
-// the agent type an issue runs as at one effort level: effort is a property of the type, not of a spawn
-export const issueAgent = (plugin: string, effort: Effort) => `${plugin}:issue-${effort}`;
+// the agent type an issue runs as: a spawn takes neither a full model id nor an effort, an agent type takes both, so
+// each model and effort a tier names is a type of its own
+export function issueAgentName(model: string, effort: Effort): string {
+  return `issue-${model.replace(/[^\w-]/g, '-')}-${effort}`.slice(0, 64);
+}
 
-export async function dispatchIssues(env: ToolEnv, port: DispatchPort, plugin: string, input: DispatchInput): Promise<string> {
+export async function dispatchIssues(env: ToolEnv, port: DispatchPort, input: DispatchInput): Promise<string> {
   const repo = env.repo(input.repo);
   const cfg = (await env.client.config(repo)).routing;
   const named = input.tier ? cfg.tiers.find((t) => t.name === input.tier) : undefined;
@@ -40,8 +45,7 @@ export async function dispatchIssues(env: ToolEnv, port: DispatchPort, plugin: s
         routing = 'text' in answer ? parseRouting(answer.text, cfg, port.now()) : { ...asRouting(fallback, 'judge', port.now()), confidence: 0, reason: `the judge did not answer (${answer.failed}); fell back to ${fallback.name}` };
       }
       const spawned = await port.spawn({
-        subagentType: issueAgent(plugin, routing.effort),
-        model: routing.model,
+        subagentType: await port.agentType(routing.model, routing.effort),
         description: `#${issue} ${detail.title}`.slice(0, 60),
         prompt: [`Issue ${key}: ${detail.title}`, detail.url, ...(input.context ? ['', input.context] : [])].join('\n'),
       });
@@ -71,7 +75,7 @@ export async function dispatchIssues(env: ToolEnv, port: DispatchPort, plugin: s
 
 const ints = (v: unknown): number[] => (Array.isArray(v) ? v : [v]).map((x) => (typeof x === 'string' ? Number(x.replace('#', '')) : x)).filter((n): n is number => typeof n === 'number' && Number.isInteger(n) && n > 0);
 
-export function dispatchTool(plugin: string): Tool<DispatchPort> {
+export function dispatchTool(): Tool<DispatchPort> {
   return {
     name: 'dispatch',
     eager: true,
@@ -93,7 +97,7 @@ export function dispatchTool(plugin: string): Tool<DispatchPort> {
       if (!issues.length) throw new HelmError(400, 'issues is required');
       const repo = typeof input.repo === 'string' && input.repo ? input.repo : undefined;
       if (repo !== undefined && !isRepoName(repo)) throw new HelmError(400, `repo ${repo} is not owner/name`);
-      return dispatchIssues(env, port, plugin, {
+      return dispatchIssues(env, port, {
         issues,
         ...(repo ? { repo } : {}),
         ...(typeof input.tier === 'string' && input.tier ? { tier: input.tier } : {}),
