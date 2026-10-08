@@ -12,7 +12,7 @@ export function pullFor(issue: number, pulls: readonly Pull[]): Pull | undefined
   return mine.find((p) => p.state === 'open') ?? mine.find((p) => p.state === 'merged') ?? mine[0];
 }
 
-const LIVE: ReadonlySet<AgentStatus> = new Set(['running', 'idle']);
+const LIVE: ReadonlySet<AgentStatus> = new Set(['pending', 'running', 'waiting', 'idle']);
 
 // a session lists a new agent with its next heartbeat; until then a fresh claim counts as running
 const CLAIM_GRACE_MS = 90_000;

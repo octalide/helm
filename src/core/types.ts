@@ -137,7 +137,8 @@ export type LocalState = {
 
 export type SessionRole = 'coordinator' | 'repo' | 'other';
 
-export type AgentStatus = 'running' | 'idle' | 'completed' | 'failed' | 'killed' | 'gone';
+// the engine's agent statuses, and gone for one no live session lists
+export type AgentStatus = 'pending' | 'running' | 'waiting' | 'idle' | 'completed' | 'failed' | 'killed' | 'gone';
 
 export type AgentRecord = {
   id: string;
