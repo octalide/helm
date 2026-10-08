@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { mergeConfig, DEFAULT_CONFIG } from '../src/core/config.ts';
 import { trimLog } from '../src/daemon/helmd.ts';
-import { parseBranches, parseStatus, parseWorktrees, repoOfRemote } from '../src/daemon/local.ts';
+import { repoOfRemote } from '../src/core/repo.ts';
+import { parseBranches, parseStatus, parseWorktrees } from '../src/daemon/local.ts';
 
 describe('local git parsing', () => {
   it('reads remotes in every spelling', () => {

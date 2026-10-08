@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { type Config, mergeConfig, repoLayer } from '../core/config.ts';
-import type { AnswerBody, Answered, ClaimBody, ConfigView, DecisionBody, QueueBody, RegisterBody, ReportBody, StreamFrame, SubscribeBody } from '../core/protocol.ts';
+import type { AnswerBody, Answered, ClaimBody, ConfigView, DecisionBody, IssueDetail, QueueBody, RegisterBody, ReportBody, StreamFrame, SubscribeBody } from '../core/protocol.ts';
 import { workKey } from '../core/protocol.ts';
 import type { HelmPaths } from '../core/paths.ts';
 import type { AgentRecord, Decision, Fleet, ForgeState, HelmEvent, Letter, LocalState, Phase, PollStatus, RepoName, RepoView, Session, SessionRole, Subscription, WorkView } from '../core/types.ts';
@@ -385,7 +385,8 @@ export class Daemon {
   // a repository a caller asks about is polled from now on, and read at once the first time
   async ask(repo: RepoName): Promise<RepoView> {
     this.asked.set(repo, this.now());
-    if (!this.pollers.get(repo)?.forge) await this.pollRepo(repo);
+    // a cached snapshot from before this daemon started is not an answer
+    if (!this.polls.get(repo)?.lastPoll) await this.pollRepo(repo);
     if (!this.local.has(repo)) {
       if (!this.checkouts.size) {
         this.checkouts = await discover(this.config.roots, this.git);
@@ -570,19 +571,6 @@ export class Daemon {
     await writeJson(this.paths.ledger, this.ledger.data);
   }
 }
-
-export type IssueDetail = {
-  repo: RepoName;
-  number: number;
-  title: string;
-  state: string;
-  url: string;
-  pr: boolean;
-  author: string;
-  labels: string[];
-  body: string;
-  comments: { author: string; at: string; url: string; body: string }[];
-};
 
 // timestamps dropped, then the error lines with what led up to them, a grep, or the tail
 export function trimLog(raw: string, opts: { tail?: number; grep?: string; errors?: boolean }): string {

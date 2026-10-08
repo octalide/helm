@@ -67,6 +67,19 @@ export type StreamFrame =
   | { type: 'changed'; at: number }
   | { type: 'ping'; at: number };
 
+export type IssueDetail = {
+  repo: RepoName;
+  number: number;
+  title: string;
+  state: string;
+  url: string;
+  pr: boolean;
+  author: string;
+  labels: string[];
+  body: string;
+  comments: { author: string; at: string; url: string; body: string }[];
+};
+
 export type Problem = { error: string; detail?: unknown };
 
 export type ClaimRefused = Problem & { owner: string };

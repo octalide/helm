@@ -1,0 +1,41 @@
+import { isRepoName } from '../src/core/repo.ts';
+import type { RepoName, SessionRole } from '../src/core/types.ts';
+import { type HelmClient, HelmError } from '../src/mod/client.ts';
+import type { Mailbox } from '../src/mod/mailbox.ts';
+import type { ToolEnv } from '../src/mod/tools.ts';
+
+export const PLUGIN = 'helm';
+
+export const ROLES: readonly SessionRole[] = ['coordinator', 'repo', 'other'];
+
+// one session's binding to helmd, for one load of the module: a reload starts a new one and the old one's loops stop.
+// everything that reaches the engine lives in helm.tsx, since the engine follows $ into no other file; what is here
+// and under src/mod is plain logic over the ports helm.tsx builds
+export type Runtime = {
+  client: HelmClient;
+  version: string;
+  home: string;
+  session: string;
+  repo?: RepoName;
+  role: SessionRole;
+  mailbox: Mailbox;
+  alive: boolean;
+  timers: { cancel: () => void }[];
+};
+
+export function toolEnv(r: Runtime): ToolEnv {
+  return {
+    client: r.client,
+    session: () => r.session,
+    home: r.home,
+    now: Date.now,
+    version: r.version,
+    pending: () => r.mailbox.pending(),
+    repo: (given) => {
+      if (isRepoName(given)) return given;
+      if (given !== undefined && given !== '') throw new HelmError(400, `repo ${String(given)} is not owner/name`);
+      if (!r.repo) throw new HelmError(400, 'this session has no repository: pass repo as owner/name');
+      return r.repo;
+    },
+  };
+}

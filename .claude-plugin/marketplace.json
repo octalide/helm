@@ -1,0 +1,12 @@
+{
+  "name": "helm",
+  "owner": { "name": "octalide" },
+  "description": "helm: active-work tracking for Claude Code fleets.",
+  "plugins": [
+    {
+      "name": "helm",
+      "source": "./",
+      "description": "Active-work tracking for Claude Code fleets: forge state, a work ledger, agent event delivery, model routing and a live view."
+    }
+  ]
+}
