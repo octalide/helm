@@ -71,6 +71,7 @@ export function tierChip(w) {
 const AGENT_TONE = { running: 'live', pending: 'live', waiting: 'wait', idle: 'wait', completed: 'off', failed: 'bad', killed: 'bad', gone: 'bad' };
 
 export function agentDot(w) {
+  if (!w.agent && w.report && ['working', 'waiting', 'ready'].includes(w.report.state)) return el('span', { class: 'agent live', 'data-tip': 'worked by its session, no agent' }, 'session');
   if (!w.agent) return el('span', { class: 'agent none', 'data-tip': 'no agent' }, 'no agent');
   return el('span', { class: `agent ${AGENT_TONE[w.agentStatus] || 'off'}`, 'data-tip': `agent ${w.agent}\n${w.agentStatus || 'unknown'}` }, w.agentStatus || '?');
 }

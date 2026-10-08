@@ -6,29 +6,30 @@ const KINDS = ['question', 'choice', 'routing', 'stall', 'failure'];
 
 export function inbox(main, reload) {
   const kind = filter('kind');
-  const open = store.fleet.decisions.filter((d) => d.state === 'open' && (!kind || d.kind === kind)).sort((a, b) => Number(b.blocking) - Number(a.blocking) || b.createdAt - a.createdAt);
   const all = store.fleet.decisions.filter((d) => d.state === 'open');
-  const tools = el(
-    'div',
-    { class: 'toolbar' },
-    el('div', { class: 'seg' }, el('button', { type: 'button', class: kind ? '' : 'on', onclick: () => setQuery({ kind: null }) }, `All ${all.length}`), KINDS.map((k) => el('button', { type: 'button', class: kind === k ? 'on' : '', onclick: () => setQuery({ kind: k }) }, `${k} ${all.filter((d) => d.kind === k).length}`))),
-    el('span', { class: 'grow' }),
-    el('span', { class: 'dim small' }, 'an answer resumes the agent waiting on it'),
-  );
-  let cards = main.querySelector('#cards');
-  if (!cards || main.dataset.view !== 'inbox') {
-    cards = el('div', { id: 'cards', class: 'cards' });
+  const open = all.filter((d) => !kind || d.kind === kind).sort((a, b) => Number(b.blocking) - Number(a.blocking) || b.createdAt - a.createdAt);
+  // the cards keep their place across redraws, so an answer being written keeps its focus
+  if (main.dataset.view !== 'inbox' || !main.querySelector('#cards')) {
+    main.replaceChildren(el('div', { id: 'inbox-tools' }), el('div', { id: 'cards', class: 'cards' }), el('div', { id: 'inbox-settled' }));
     main.dataset.view = 'inbox';
   }
+  main.querySelector('#inbox-tools').replaceChildren(
+    el(
+      'div',
+      { class: 'toolbar' },
+      el('div', { class: 'seg' }, el('button', { type: 'button', class: kind ? '' : 'on', onclick: () => setQuery({ kind: null }) }, `All ${all.length}`), KINDS.map((k) => el('button', { type: 'button', class: kind === k ? 'on' : '', onclick: () => setQuery({ kind: k }) }, `${k} ${all.filter((d) => d.kind === k).length}`))),
+      el('span', { class: 'grow' }),
+      el('span', { class: 'dim small' }, 'an answer resumes the agent waiting on it · ctrl+enter sends'),
+    ),
+  );
+  const cards = main.querySelector('#cards');
   if (!open.length) cards.replaceChildren(empty(kind ? `No open ${kind} decisions.` : 'Nothing waits on you.', 'Questions agents are stopped on, choices they made without you, routing picks and stalls land here.'));
   else {
     if (cards.querySelector('.empty')) cards.replaceChildren();
     patchCards(cards, open, reload);
   }
   const settled = store.fleet.decisions.filter((d) => d.state !== 'open').sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 60);
-  main.replaceChildren(
-    tools,
-    cards,
+  main.querySelector('#inbox-settled').replaceChildren(
     section(
       'Settled',
       el('span', { class: 'count' }, settled.length || ''),

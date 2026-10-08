@@ -1,6 +1,6 @@
 import { columns, legend, rollupBar, ROLLUP_LEGEND, spark, stack } from './charts.js';
 import { ATTENTION, at, done, el, empty, ext, href, keyOf, PHASE, PHASES, phasePill, phaseSince, plural, repoShort, store, visibleTree, visibleWork } from './core.js';
-import { section, where, workCard } from './parts.js';
+import { section, where } from './parts.js';
 
 const DAY = 86400_000;
 
@@ -161,7 +161,7 @@ function sessionsStrip(open) {
         return el(
           'a',
           { class: 'scard', href: href('board', '', { session: s.id }) },
-          el('div', { class: 'scard-head' }, el('span', { class: `chip role-${s.role}` }, s.role), el('b', {}, s.role === 'coordinator' ? 'coordinator' : repoShort(s.repo) || s.title || s.id.slice(0, 8))),
+          el('div', { class: 'scard-head' }, el('span', { class: `chip role-${s.role}` }, s.role), el('b', {}, s.repo ? repoShort(s.repo) : s.title || s.id.slice(0, 8))),
           stack(
             PHASES.filter((p) => p !== 'done').map((p) => ({ value: mine.filter((w) => w.phase === p).length, tone: PHASE[p].tone, label: PHASE[p].label, hatch: p === 'queued' })),
             undefined,
