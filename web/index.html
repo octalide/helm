@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>helm</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%23d97757' stroke-width='3'/%3E%3Cpath d='M16 2v8M16 22v8M2 16h8M22 16h8' stroke='%23d97757' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="mark" aria-hidden="true"></span>helm</div>
+  <div class="summary" id="summary"></div>
+  <div class="conn" id="conn" title="connection to helmd">connecting</div>
+</header>
+<main>
+  <section class="panel" id="inbox-panel">
+    <h2>Decisions <span class="count" id="inbox-count"></span></h2>
+    <div id="inbox" class="cards"></div>
+    <details class="history"><summary>Settled</summary><div id="settled" class="list"></div></details>
+  </section>
+  <section class="panel" id="work-panel">
+    <h2>Active work <span class="count" id="work-count"></span></h2>
+    <div id="work"></div>
+  </section>
+  <section class="panel two">
+    <div>
+      <h2>Repositories</h2>
+      <nav class="tabs" id="repo-tabs"></nav>
+      <nav class="tabs sub" id="repo-views"></nav>
+      <div id="repo" class="list"></div>
+    </div>
+    <div>
+      <h2>Activity</h2>
+      <div id="events" class="list feed"></div>
+      <h2>Sessions</h2>
+      <div id="sessions" class="list"></div>
+    </div>
+  </section>
+</main>
+<dialog id="log"><form method="dialog"><header><span id="log-title"></span><button aria-label="close">✕</button></header><pre id="log-body"></pre></form></dialog>
+<script src="app.js"></script>
+</body>
+</html>
