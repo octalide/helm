@@ -68,7 +68,7 @@ export class HelmClient {
 
   health = () => this.call<Health>('GET', '/v1/health');
   shutdown = () => this.call<unknown>('POST', '/v1/shutdown');
-  fleet = () => this.call<Fleet>('GET', '/v1/fleet');
+  fleet = (lite = false) => this.call<Fleet>('GET', `/v1/fleet${lite ? '?lite=1' : ''}`);
   config = (repo?: RepoName) => this.call<ConfigView>('GET', `/v1/config${repo ? `?repo=${enc(repo)}` : ''}`);
   register = (b: RegisterBody) => this.call<Session>('POST', '/v1/sessions', b);
   heartbeat = (id: string, agents: AgentRecord[]) => this.call<Session>('POST', `/v1/sessions/${enc(id)}/heartbeat`, { agents });

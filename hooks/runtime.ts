@@ -19,6 +19,8 @@ export type Runtime = {
   repo?: RepoName;
   role: SessionRole;
   mailbox: Mailbox;
+  // the web page helmd serves, once it has answered
+  web?: string;
   alive: boolean;
   timers: { cancel: () => void }[];
 };
