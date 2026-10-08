@@ -15,7 +15,8 @@ export function rootsOf(tree: readonly TreeNode[]): Map<string, string> {
 
 const signature = (n: TreeNode) => JSON.stringify(n.rollup);
 
-// one progress event per root epic whose rollup moved since the last look, carrying the phase changes under it.
+// one progress event per root epic whose rollup moved since the last look or that has a phase change under it, carrying
+// those changes, so no move under an epic goes unheard.
 // the first look only remembers, so a restart announces nothing
 export function epicEvents(tree: readonly TreeNode[], before: ReadonlyMap<string, string> | undefined, changes: readonly HelmEvent[], now: number): { events: HelmEvent[]; seen: Map<string, string> } {
   const seen = new Map(tree.map((r) => [workKey(r.repo, r.number), signature(r)]));
@@ -30,7 +31,8 @@ export function epicEvents(tree: readonly TreeNode[], before: ReadonlyMap<string
   for (const r of tree) {
     const key = workKey(r.repo, r.number);
     const sig = seen.get(key)!;
-    if (before.get(key) === sig) continue;
+    const moves = under.get(key) ?? [];
+    if (before.get(key) === sig && !moves.length) continue;
     const complete = r.rollup.total > 0 && r.rollup.done === r.rollup.total;
     events.push({
       id: `epic:${key}:${sig}@${now}`,
@@ -40,7 +42,7 @@ export function epicEvents(tree: readonly TreeNode[], before: ReadonlyMap<string
       at: now,
       tags: complete ? ['progress', 'complete'] : ['progress'],
       text: `${key} ${percent(r.rollup)}%: ${r.title}`,
-      detail: [rollupText(r.rollup), ...(under.get(key) ?? []).map((e) => e.text)],
+      detail: [rollupText(r.rollup), ...moves.map((e) => e.text)],
       ...(r.url ? { url: r.url } : {}),
     });
   }

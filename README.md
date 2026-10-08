@@ -74,9 +74,9 @@ Work moves through `queued → working → draft → ci → ready → done`, wit
 
 ## Hierarchy
 
-GitHub's sub-issues draw the tree. Every open issue with sub-issues that no other issue in a watched repository holds is a root epic, and each node joins its work item: phase, agent, tier and plan progress. Sub-issues in other repositories nest under their parent, and a sub-epic in a repository helm does not poll is counted from its summary. Each epic rolls up its leaves: done, active, in CI, needing attention, queued and unowned. Sub-issues are read again only when their parent moved, or every 10 minutes.
+GitHub's sub-issues draw the tree. Every open issue with sub-issues that no other issue in a watched repository holds is a root epic, and each node joins its work item: phase, agent, tier and plan progress. Sub-issues in other repositories nest under their parent, and a sub-epic in a repository helm does not poll is counted from its summary. Each epic rolls up its leaves: done, active, in CI, ready, needing attention, queued and unowned. Sub-issues are read again only when their parent moved, or every 10 minutes.
 
-Each work item keeps when it entered each phase, and finished work stays 30 days, so the page can draw a timeline. A coordinator hears an epic as one `[helm epic]` delivery each time its rollup moves, carrying the changes under it, instead of every child's phase change. Work that needs someone still arrives at once.
+Each work item keeps when it entered each phase, and finished work stays 30 days, so the page can draw a timeline. A coordinator hears an epic as one `[helm epic]` delivery whenever anything under it moves, carrying its rollup and every phase change under it in that batch, instead of a delivery per child. Work that needs someone still arrives at once.
 
 ## Routing
 
