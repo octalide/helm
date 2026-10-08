@@ -8,7 +8,7 @@ import { HelmClient, HelmError } from '../src/mod/client.ts';
 import { type DispatchPort, dispatchTool, issueAgentName } from '../src/mod/dispatch.ts';
 import { Mailbox } from '../src/mod/mailbox.ts';
 import { type Tool, TOOLS } from '../src/mod/tools.ts';
-import { bandRow, paneRows, type Row, type Self, statusText } from '../src/mod/view.ts';
+import { bandRow, isTab, paneRows, type Row, type Self, statusText, type Tab } from '../src/mod/view.ts';
 import { PLUGIN, ROLES, type Runtime, toolEnv } from './runtime.ts';
 
 type $ = EngineInterface;
@@ -35,6 +35,7 @@ function rolePrompt(r: Runtime): string | undefined {
 }
 
 const fleetAt = atom({ plugin: 'helm', key: 'fleetAt' } as const, 0);
+const paneTab = atom({ plugin: 'helm', key: 'paneTab' } as const, 'work' as Tab);
 let fleet: Fleet | undefined;
 
 let rt: Runtime | undefined;
@@ -194,13 +195,30 @@ function refresh($: $, r: Runtime): void {
   });
 }
 
+// a row of plain segments is one line of text; a row holding a control lays its segments out side by side, each
+// control a Button whose press the ui.press hook routes by its key
 function rowsOf($: $, e: Parameters<$['ui']['resolve']>[0], rows: Row[]) {
-  const { Box, Text } = $.ui.resolve(e);
+  const { Box, Text, Button } = $.ui.resolve(e);
+  const text = (s: Row[number]) => <Text {...(s.color ? { color: s.color } : {})} dimColor={s.dim ?? false} bold={s.bold ?? false}>{s.text}</Text>;
   return (
     <Box flexDirection="column">
-      {rows.map((row) => (
-        <Text wrap="truncate-end">{row.length ? row.map((s) => <Text {...(s.color ? { color: s.color } : {})} dimColor={s.dim ?? false} bold={s.bold ?? false}>{s.text}</Text>) : ' '}</Text>
-      ))}
+      {rows.map((row) =>
+        row.some((s) => s.press) ? (
+          <Box flexDirection="row">
+            {row.map((s) =>
+              s.press ? (
+                <Button key={s.press} {...(s.boxed ? {} : { plain: true as const })} {...(s.hotkey ? { hotkey: s.hotkey } : {})} dimColor={s.dim ?? false} onPress={() => {}}>
+                  {text(s)}
+                </Button>
+              ) : (
+                text(s)
+              ),
+            )}
+          </Box>
+        ) : (
+          <Text wrap="truncate-end">{row.length ? row.map(text) : ' '}</Text>
+        ),
+      )}
     </Box>
   );
 }
@@ -347,11 +365,26 @@ export const register: Register = (on) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const r = rt;
     await read($, fleetAt);
+    const tab = await read($, paneTab);
     const f = fleet;
     const { Text } = $.ui.resolve(e);
     if (!r || !f) return <Text dimColor>helm is connecting to helmd</Text>;
-    return rowsOf($, e, paneRows(f, selfOf(r), Math.max(4, (e.viewport?.rows ?? 24) - 2), r.web));
+    return rowsOf($, e, paneRows(f, selfOf(r), { rows: Math.max(6, (e.viewport?.rows ?? 24) - 2), cols: e.viewport?.columns ?? 80, tab, ...(r.web ? { web: r.web } : {}) }));
   });
+
+  // the pane's controls: a tab, an option that answers a decision, or a dismissal
+  on('ui.press', async ($, e, next) => {
+    if (e.requestId !== PANE) return next(e);
+    const r = rt;
+    const [kind, id, index] = e.element.split(':');
+    if (kind === 'tab' && isTab(id)) await update($, paneTab, () => id);
+    if (r && id && kind === 'answer') {
+      const option = fleet?.decisions.find((d) => d.id === id)?.options?.[Number(index)];
+      if (option) await r.client.answer(id, { text: '', option, by: 'pane' }).then(() => refresh($, r), (err: Error) => $.ui.log(`helm: answer failed: ${err.message}`, { to: 'debug' }));
+    }
+    if (r && id && kind === 'dismiss') await r.client.dismiss(id).then(() => refresh($, r), (err: Error) => $.ui.log(`helm: dismiss failed: ${err.message}`, { to: 'debug' }));
+    return next(e);
+  }).catch(($, e, next) => next(e));
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const r = rt;

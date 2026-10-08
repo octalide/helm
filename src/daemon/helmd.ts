@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { verdictOf } from '../core/checks.ts';
+import { isDone, verdictOf } from '../core/checks.ts';
 import { type Config, mergeConfig, repoLayer } from '../core/config.ts';
 import type { AnswerBody, Answered, ClaimBody, ConfigView, DecisionBody, IssueDetail, QueueBody, RegisterBody, ReportBody, StreamFrame, SubscribeBody } from '../core/protocol.ts';
 import { workKey } from '../core/protocol.ts';
@@ -37,6 +37,9 @@ type Poll = PollStatus & { due: number; running: boolean };
 const POLL_CONCURRENCY = 3;
 // a repository asked about by a tool or the page stays polled this long after the last ask
 const LITE_DONE_MS = 24 * 3600_000;
+// runs a lite view carries: those in flight and those finished this recently, newest first
+const LITE_RUNS_MS = 30 * 60_000;
+const LITE_RUNS = 8;
 const ASKED_MS = 30 * 60_000;
 // checkouts are searched for again this often
 const DISCOVER_MS = 10 * 60_000;
@@ -381,7 +384,7 @@ export class Daemon {
   fleet(lite = false): Fleet {
     const d = this.ledger.data;
     const repos: Record<RepoName, RepoView> = {};
-    for (const repo of this.watched()) repos[repo] = lite ? { polling: this.repoView(repo).polling } : this.repoView(repo);
+    for (const repo of this.watched()) repos[repo] = lite ? this.liteView(repo) : this.repoView(repo);
     const work = this.workViews();
     return {
       version: this.version,
@@ -407,6 +410,12 @@ export class Daemon {
       ...(local ? { local } : {}),
       polling: st ? { active: st.active, interval: st.interval, failures: st.failures, ...(st.lastPoll ? { lastPoll: st.lastPoll } : {}), ...(st.lastChange ? { lastChange: st.lastChange } : {}), ...(st.error ? { error: st.error } : {}) } : { active: false, interval: 0, failures: 0 },
     };
+  }
+
+  private liteView(repo: RepoName): RepoView {
+    const now = this.now();
+    const runs = (this.pollers.get(repo)?.forge?.runs ?? []).filter((r) => !isDone(r.state) || now - Date.parse(r.updatedAt) < LITE_RUNS_MS).slice(0, LITE_RUNS);
+    return { polling: this.repoView(repo).polling, runs };
   }
 
   // a repository a caller asks about is polled from now on, and read at once the first time

@@ -62,6 +62,19 @@ A session in a repository is a **repo** session for it. Set the role with `HELM_
 
 `/helm` shows the session's binding, and `/helm pane`, `/helm web`, `/helm role …` and `/helm restart` do what they say.
 
+## Pane
+
+`/helm pane` opens a dashboard beside the transcript, with four tabs. Each tab key works while the pane has the focus.
+
+| key | tab | shows |
+|---|---|---|
+| `1` | Work | the session's work, or for a coordinator every session's: a bar of it by phase, then each item with its plan progress and next step, its checks with the running step or the failed checks, and its agent, tier and PR |
+| `2` | Epics | each epic touching the session, with its percent, rollup bar and counts, and the work moving under it |
+| `3` | CI | runs in flight with their job bar and running steps, then runs finished in the last half hour |
+| `4` | Inbox | the session's open decisions; an option answers one in place, and `dismiss` or `reviewed` closes it. A written answer goes on the web page |
+
+Above the prompt, one line appears while something needs you, and the status line counts work in progress.
+
 ## Delivery
 
 Events reach whoever subscribed. A letter for the main loop rides the next tool result while a turn runs, or starts a turn when the session is idle. A letter for a subagent rides that agent's next tool call. After 60 s without one, or once the agent has ended its turn, it goes as a message that resumes the agent. If the engine refuses the message, the letter is relayed to the main loop and the agent's subscriptions are retired. helmd hands each letter out once.
