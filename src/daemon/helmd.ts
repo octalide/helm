@@ -367,6 +367,7 @@ export class Daemon {
       decisions: Object.values(d.decisions).sort((a, b) => b.createdAt - a.createdAt),
       subscriptions: Object.values(d.subscriptions),
       repos,
+      ...(lite ? {} : { events: d.events.slice(-150) }),
       rates: { ...this.gh.rates },
       at: this.now(),
     };

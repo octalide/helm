@@ -330,6 +330,8 @@ export type Fleet = {
   decisions: Decision[];
   subscriptions: Subscription[];
   repos: Record<RepoName, RepoView>;
+  // the newest events, newest last; absent from a lite answer
+  events?: HelmEvent[];
   rates: Record<string, { remaining: number; limit: number; resetAt: number }>;
   at: number;
 };
