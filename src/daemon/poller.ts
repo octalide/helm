@@ -1,10 +1,10 @@
 import { isDone, verdictOf } from '../core/checks.ts';
-import type { ForgeState, HelmEvent, Run } from '../core/types.ts';
+import type { Child, ForgeState, HelmEvent, Issue, Run } from '../core/types.ts';
 import { type CiMemory, diffForge, emptyMemory } from './events.ts';
-import { fromJobs, fromRuns, fromSnapshot, type RestJobs, type RestRuns, SNAPSHOT_QUERY, type Snapshot } from './forge.ts';
+import { type ChildrenRead, childrenQuery, fromChildren, fromJobs, fromRuns, fromSnapshot, type RestJobs, type RestRuns, SNAPSHOT_QUERY, type Snapshot } from './forge.ts';
 import type { GitHub } from './github.ts';
 
-export const CACHE_VERSION = 1;
+export const CACHE_VERSION = 2;
 
 // what a repository's poller keeps across restarts
 export type RepoCache = {
@@ -14,9 +14,11 @@ export type RepoCache = {
   // ref name -> whether it is a tag, looked up once
   tags: Record<string, boolean>;
   snapshotAt?: number;
+  // issue number -> what its sub-issues were read against, so a parent is read again only when it moved
+  childSig: Record<number, string>;
 };
 
-export const emptyCache = (): RepoCache => ({ version: CACHE_VERSION, memory: emptyMemory(), tags: {} });
+export const emptyCache = (): RepoCache => ({ version: CACHE_VERSION, memory: emptyMemory(), tags: {}, childSig: {} });
 
 export type PollResult = { changed: boolean; events: HelmEvent[] };
 
@@ -25,6 +27,8 @@ const SNAPSHOT_MAX_AGE_MS = 10 * 60_000;
 // jobs read per poll, newest runs first
 const JOB_READS = 12;
 const RUNS_PAGE = 30;
+// parents whose sub-issues one query reads
+const CHILD_BATCH = 25;
 
 // one repository's forge state. each poll asks two conditional probes, which cost nothing when unchanged, and reads
 // the graphql snapshot only when one moved, a status check is pending, or the snapshot has aged out
@@ -53,8 +57,10 @@ export class RepoPoller {
     const statusPending = prev?.pulls.some((p) => p.state === 'open' && p.checks.some((c) => c.run === undefined && !isDone(c.state))) ?? false;
     const stale = now - (this.cache.snapshotAt ?? 0) > SNAPSHOT_MAX_AGE_MS;
     let base = prev ? { defaultBranch: prev.defaultBranch, issues: prev.issues, pulls: prev.pulls } : undefined;
+    let children = prev?.children ?? {};
     if (!base || force || items.changed || runsRead.changed || statusPending || stale) {
       base = fromSnapshot(await this.gh.graphql<Snapshot>(SNAPSHOT_QUERY, { owner, name }));
+      children = await this.children(base.issues, children, stale || force);
       this.cache.snapshotAt = now;
     }
     const runs = await this.withJobs(fromRuns(runsRead.body), prev?.runs ?? [], now);
@@ -62,7 +68,7 @@ export class RepoPoller {
       const tag = await this.isTag(r);
       if (tag) r.tag = true;
     }
-    const next: ForgeState = { repo: this.repo, ...base, runs, polledAt: now };
+    const next: ForgeState = { repo: this.repo, ...base, runs, children, polledAt: now };
     const { events, memory } = diffForge(prev, next, this.cache.memory, { now, stallMs: this.stallMs() });
     const changed = !prev || stripTime(prev) !== stripTime(next);
     this.cache = { ...this.cache, forge: next, memory };
@@ -91,6 +97,26 @@ export class RepoPoller {
         out.push(read ? { ...r, jobs: fromJobs(read.body) } : withOld(r, old));
       } else out.push(withOld(r, old));
     }
+    return out;
+  }
+
+  // sub-issues of every parent here, read again for a parent whose summary or update time moved, or for all when
+  // the snapshot aged out, since a child's title or state can change without touching its parent
+  private async children(issues: readonly Issue[], before: Record<number, Child[]>, all: boolean): Promise<Record<number, Child[]>> {
+    const [owner, name] = this.repo.split('/') as [string, string];
+    const parents = issues.filter((i) => i.subIssues);
+    const sig = (i: Issue) => `${i.updatedAt}|${i.subIssues?.done}/${i.subIssues?.total}`;
+    const stale = parents.filter((i) => all || before[i.number] === undefined || this.cache.childSig[i.number] !== sig(i));
+    const out: Record<number, Child[]> = {};
+    for (const i of parents) if (before[i.number]) out[i.number] = before[i.number]!;
+    for (let at = 0; at < stale.length; at += CHILD_BATCH) {
+      const batch = stale.slice(at, at + CHILD_BATCH);
+      const read = await this.gh.graphql<ChildrenRead>(childrenQuery(batch.map((i) => i.number)), { owner, name }).catch(() => undefined);
+      if (!read) continue;
+      Object.assign(out, fromChildren(read));
+      for (const i of batch) this.cache.childSig[i.number] = sig(i);
+    }
+    for (const n of Object.keys(this.cache.childSig)) if (!parents.some((i) => i.number === Number(n))) delete this.cache.childSig[Number(n)];
     return out;
   }
 

@@ -8,6 +8,16 @@ const sub = (over: Partial<Subscription>): Subscription => ({ id: 's1', repo: 'o
 const ev = (over: Partial<HelmEvent>): HelmEvent => ({ id: 'e', kind: 'issue', repo: 'o/r', at: 0, tags: [], text: 't', ...over });
 
 describe('matches', () => {
+  it('gives the fleet an epic\'s progress in place of its work, except what needs someone', () => {
+    const s = sub({ scope: { kind: 'fleet' } });
+    expect(matches(ev({ kind: 'work', issue: 2, epic: 'o/r#1', tags: ['phase', 'ci'] }), s, ctx)).toBe(false);
+    expect(matches(ev({ kind: 'work', issue: 2, epic: 'o/r#1', tags: ['phase', 'blocked'] }), s, ctx)).toBe(true);
+    expect(matches(ev({ kind: 'work', issue: 3, tags: ['phase', 'ci'] }), s, ctx)).toBe(true);
+    expect(matches(ev({ kind: 'epic', issue: 1, tags: ['progress'] }), s, ctx)).toBe(true);
+    expect(matches(ev({ kind: 'epic', issue: 1, tags: ['progress'] }), sub({ scope: { kind: 'work' } }), ctx)).toBe(false);
+    expect(matches(ev({ kind: 'epic', issue: 1, tags: ['progress'] }), sub({}), ctx)).toBe(false);
+  });
+
   it('takes a failed verdict but not a green one under failures', () => {
     const s = sub({});
     expect(matches(ev({ kind: 'ci', pr: 1, tags: ['settled', 'failure'] }), s, ctx)).toBe(true);

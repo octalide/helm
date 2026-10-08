@@ -4,9 +4,11 @@ import { type Config, mergeConfig, repoLayer } from '../core/config.ts';
 import type { AnswerBody, Answered, ClaimBody, ConfigView, DecisionBody, IssueDetail, QueueBody, RegisterBody, ReportBody, StreamFrame, SubscribeBody } from '../core/protocol.ts';
 import { workKey } from '../core/protocol.ts';
 import type { HelmPaths } from '../core/paths.ts';
-import type { AgentRecord, Decision, Fleet, ForgeState, HelmEvent, Letter, LocalState, Phase, PollStatus, RepoName, RepoView, Session, SessionRole, Subscription, WorkView } from '../core/types.ts';
+import type { AgentRecord, Decision, Fleet, ForgeState, HelmEvent, Letter, LocalState, Phase, PollStatus, RepoName, RepoView, Session, SessionRole, Subscription, TreeNode, WorkView } from '../core/types.ts';
 import { route } from './deliver.ts';
+import { buildTree } from '../core/tree.ts';
 import { pullFor, viewOf } from './derive.ts';
+import { epicEvents, rootsOf } from './epics.ts';
 import type { GitHub } from './github.ts';
 import { emptyLedger, Ledger, type LedgerData } from './ledger.ts';
 import { discover, type Git, git as realGit, scan } from './local.ts';
@@ -31,6 +33,7 @@ type Poll = PollStatus & { due: number; running: boolean };
 // how many repositories poll at once
 const POLL_CONCURRENCY = 3;
 // a repository asked about by a tool or the page stays polled this long after the last ask
+const LITE_DONE_MS = 24 * 3600_000;
 const ASKED_MS = 30 * 60_000;
 // checkouts are searched for again this often
 const DISCOVER_MS = 10 * 60_000;
@@ -57,6 +60,8 @@ export class Daemon {
   private readonly polls = new Map<RepoName, Poll>();
   private readonly asked = new Map<RepoName, number>();
   private phases?: Map<string, Phase>;
+  // root epic -> its rollup when last looked at
+  private rollups?: Map<string, string>;
   private readonly streams = new Map<string, Set<(f: StreamFrame) => void>>();
   private readonly watchers = new Set<(f: StreamFrame) => void>();
   private readonly timers: ReturnType<typeof setInterval>[] = [];
@@ -310,6 +315,7 @@ export class Daemon {
     for (const v of views) {
       const key = workKey(v.repo, v.issue);
       next.set(key, v.phase);
+      this.ledger.phase(v.repo, v.issue, v.phase);
       const was = before.get(key);
       const stallKey = `stall:work:${key}`;
       if (v.phase === 'stalled') {
@@ -344,7 +350,19 @@ export class Daemon {
       });
     }
     this.phases = next;
-    this.dispatch(events);
+    const tree = this.tree(views);
+    const roots = rootsOf(tree);
+    for (const e of events) {
+      const root = roots.get(workKey(e.repo!, e.issue!));
+      if (root) e.epic = root;
+    }
+    const epics = epicEvents(tree, this.rollups, events, this.now());
+    this.rollups = epics.seen;
+    this.dispatch([...events, ...epics.events]);
+  }
+
+  private tree(work: readonly WorkView[]): TreeNode[] {
+    return buildTree([...this.pollers.values()].flatMap((p) => (p.forge ? [p.forge] : [])), work);
   }
 
   workViews(): WorkView[] {
@@ -360,10 +378,13 @@ export class Daemon {
     const d = this.ledger.data;
     const repos: Record<RepoName, RepoView> = {};
     for (const repo of this.watched()) repos[repo] = lite ? { polling: this.repoView(repo).polling } : this.repoView(repo);
+    const work = this.workViews();
     return {
       version: this.version,
       sessions: Object.values(d.sessions).sort((a, b) => b.seenAt - a.seenAt),
-      work: this.workViews(),
+      // a pane has no use for work finished before today
+      work: lite ? work.filter((w) => !w.finished || this.now() - w.finished.at < LITE_DONE_MS) : work,
+      tree: this.tree(work),
       decisions: Object.values(d.decisions).sort((a, b) => b.createdAt - a.createdAt),
       subscriptions: Object.values(d.subscriptions),
       repos,

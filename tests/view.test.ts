@@ -6,7 +6,7 @@ import { T0 } from './fixtures.ts';
 const session = (id: string, over: Partial<Session> = {}): Session => ({ id, role: 'repo', cwd: '/', agents: [], startedAt: T0, seenAt: T0, ...over });
 const work = (issue: number, phase: WorkView['phase'], owner = 'S'): WorkView => ({ repo: 'o/r', issue, title: `t${issue}`, owner, order: issue, queuedAt: T0, updatedAt: T0, phase, verdict: 'none', checks: [], jobs: [], decisions: 0 });
 const decision = (id: string, blocking: boolean, issue: number): Decision => ({ id, kind: blocking ? 'question' : 'routing', repo: 'o/r', issue, title: `q${id}`, body: '', blocking, state: 'open', createdAt: T0, updatedAt: T0 });
-const fleet = (over: Partial<Fleet>): Fleet => ({ version: '0', sessions: [session('S'), session('B')], work: [], decisions: [], subscriptions: [], repos: {}, rates: {}, at: T0, ...over });
+const fleet = (over: Partial<Fleet>): Fleet => ({ version: '0', sessions: [session('S'), session('B')], work: [], decisions: [], subscriptions: [], repos: {}, tree: [], rates: {}, at: T0, ...over });
 const text = (rows: { text: string }[][]) => rows.map((r) => r.map((s) => s.text).join(''));
 
 describe('view', () => {
