@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { isDone } from '../core/checks.ts';
+import { isDone, verdictOf } from '../core/checks.ts';
 import { type Config, mergeConfig, repoLayer } from '../core/config.ts';
 import type { AnswerBody, Answered, ClaimBody, ConfigView, DecisionBody, IssueDetail, QueueBody, RegisterBody, ReportBody, StreamFrame, SubscribeBody } from '../core/protocol.ts';
 import { workKey } from '../core/protocol.ts';
@@ -8,8 +8,9 @@ import type { HelmPaths } from '../core/paths.ts';
 import type { AgentRecord, Decision, Fleet, ForgeState, HelmEvent, Letter, LocalState, Phase, PollStatus, RepoName, RepoView, Session, SessionRole, Subscription, TreeNode, WorkView } from '../core/types.ts';
 import { route } from './deliver.ts';
 import { buildTree } from '../core/tree.ts';
-import { selfWorked } from '../core/work.ts';
+import { hasWorker, selfWorked } from '../core/work.ts';
 import { pullFor, viewOf } from './derive.ts';
+import { verdictEvent } from './events.ts';
 import { epicEvents, rootsOf } from './epics.ts';
 import type { GitHub } from './github.ts';
 import { emptyLedger, Ledger, type LedgerData } from './ledger.ts';
@@ -125,7 +126,7 @@ export class Daemon {
   private active(repo: RepoName): boolean {
     if (this.pollers.get(repo)?.busy()) return true;
     const d = this.ledger.data;
-    if (Object.values(d.work).some((w) => w.repo === repo && !w.finished && w.agent)) return true;
+    if (Object.values(d.work).some((w) => w.repo === repo && !w.finished && hasWorker(w))) return true;
     return Object.values(d.subscriptions).some((s) => s.repo === repo && s.scope.kind !== 'repo');
   }
 
@@ -274,10 +275,11 @@ export class Daemon {
     return { protectedBranches: new Set(['main', 'dev', ...(def ? [def] : [])]) };
   }
 
-  private dispatch(events: HelmEvent[]): void {
+  // events to every subscription that takes them; to only the given ones for a catch-up, which the log already holds
+  private dispatch(events: HelmEvent[], only?: Subscription[]): void {
     if (!events.length) return;
-    this.ledger.record(events);
-    const subs = Object.values(this.ledger.data.subscriptions);
+    if (!only) this.ledger.record(events);
+    const subs = only ?? Object.values(this.ledger.data.subscriptions);
     // events of different repositories match against different protected branches
     const byRepo = new Map<string, HelmEvent[]>();
     for (const e of events) byRepo.set(e.repo ?? '', [...(byRepo.get(e.repo ?? '') ?? []), e]);
@@ -450,10 +452,22 @@ export class Daemon {
     return this.ledger.setRole(id, role, repo);
   }
 
-  subscribe(b: SubscribeBody): Subscription {
+  // a new subscription polls its repository, and one on a pr whose head ci has already settled hears that verdict
+  // now, alone: the event that announced it fired before the subscription existed
+  async subscribe(b: SubscribeBody): Promise<Subscription> {
     const sub = this.ledger.subscribe(b);
-    if (sub.repo) void this.ask(sub.repo);
+    if (sub.repo) await this.catchUp(sub, sub.repo);
     return sub;
+  }
+
+  private async catchUp(sub: Subscription, repo: RepoName): Promise<void> {
+    await this.ask(repo).catch(() => undefined);
+    if (sub.scope.kind !== 'pr' || sub.ci === 'none') return;
+    const number = sub.scope.number;
+    const pull = this.forgeOf(repo)?.pulls.find((p) => p.number === number && p.state === 'open');
+    const verdict = pull ? verdictOf(pull.checks) : 'none';
+    if (!pull || (verdict !== 'success' && verdict !== 'failure')) return;
+    this.dispatch([verdictEvent(repo, pull, verdict, this.now())], [sub]);
   }
 
   queue(b: QueueBody): ReturnType<Ledger['queue']> {
