@@ -1,0 +1,61 @@
+import { describe, expect, it } from 'vitest';
+import { route } from '../src/daemon/deliver.ts';
+import { globMatch, matches, retiredBy } from '../src/daemon/watch.ts';
+import type { HelmEvent, Subscription } from '../src/core/types.ts';
+
+const ctx = { protectedBranches: new Set(['dev', 'main']) };
+const sub = (over: Partial<Subscription>): Subscription => ({ id: 's1', repo: 'o/r', scope: { kind: 'repo' }, ci: 'failures', bots: false, session: 'S', createdAt: 0, ...over });
+const ev = (over: Partial<HelmEvent>): HelmEvent => ({ id: 'e', kind: 'issue', repo: 'o/r', at: 0, tags: [], text: 't', ...over });
+
+describe('matches', () => {
+  it('takes a failed verdict but not a green one under failures', () => {
+    const s = sub({});
+    expect(matches(ev({ kind: 'ci', pr: 1, tags: ['settled', 'failure'] }), s, ctx)).toBe(true);
+    expect(matches(ev({ kind: 'ci', pr: 1, tags: ['settled', 'success'] }), s, ctx)).toBe(false);
+  });
+
+  it('takes the green verdict that settles an until-settled pr subscription', () => {
+    const s = sub({ scope: { kind: 'pr', number: 1 }, ci: 'failures', until: 'settled' });
+    const e = ev({ kind: 'ci', pr: 1, tags: ['settled', 'success'] });
+    expect(matches(e, s, ctx)).toBe(true);
+    expect(retiredBy(e, s)).toBe(true);
+  });
+
+  it('hears failed runs on a whole repository only on long-lived branches', () => {
+    const s = sub({});
+    expect(matches(ev({ kind: 'ci', run: 1, branch: 'dev', tags: ['completed', 'failure'] }), s, ctx)).toBe(true);
+    expect(matches(ev({ kind: 'ci', run: 1, branch: 'feat/9', tags: ['completed', 'failure'] }), s, ctx)).toBe(false);
+  });
+
+  it('drops bots and housekeeping by default', () => {
+    const s = sub({});
+    expect(matches(ev({ tags: ['comment'], author: { login: 'dependabot', bot: true } }), s, ctx)).toBe(false);
+    expect(matches(ev({ tags: ['labeled'] }), s, ctx)).toBe(false);
+    expect(matches(ev({ tags: ['comment'] }), s, ctx)).toBe(true);
+  });
+
+  it('scopes work events to the owning session', () => {
+    const s = sub({ scope: { kind: 'work' }, repo: undefined });
+    expect(matches(ev({ kind: 'work', tags: ['phase', 'ci'], owner: 'S' }), s, ctx)).toBe(true);
+    expect(matches(ev({ kind: 'work', tags: ['phase', 'ci'], owner: 'X' }), s, ctx)).toBe(false);
+  });
+
+  it('globs tags', () => {
+    expect(globMatch('v1.*', 'v1.2.0')).toBe(true);
+    expect(globMatch('v1.?', 'v1.22')).toBe(false);
+  });
+});
+
+describe('route', () => {
+  it('sends one letter per recipient and retires what ran its course', () => {
+    const subs = [sub({ id: 's1' }), sub({ id: 's2', agent: 'A', scope: { kind: 'pr', number: 1 }, ci: 'settled', until: 'settled' }), sub({ id: 's3', agent: 'A', scope: { kind: 'pr', number: 1 } })];
+    const e = ev({ kind: 'ci', pr: 1, tags: ['settled', 'failure'], text: 'ci settled failure: pr #1' });
+    const { letters, retired } = route([e], subs, ctx, 0);
+    expect(letters.map((l) => [l.session, l.agent, l.subs])).toEqual([
+      ['S', undefined, ['s1']],
+      ['S', 'A', ['s2', 's3']],
+    ]);
+    expect(letters[1]?.text.split('\n')[0]).toBe('[helm o/r]');
+    expect(retired).toEqual(['s2']);
+  });
+});

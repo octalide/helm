@@ -1,0 +1,40 @@
+import { describe, expect, it } from 'vitest';
+import { mergeConfig, DEFAULT_CONFIG } from '../src/core/config.ts';
+import { trimLog } from '../src/daemon/helmd.ts';
+import { parseBranches, parseStatus, parseWorktrees, repoOfRemote } from '../src/daemon/local.ts';
+
+describe('local git parsing', () => {
+  it('reads remotes in every spelling', () => {
+    expect(repoOfRemote('git@github.com:octalide/helm.git')).toBe('octalide/helm');
+    expect(repoOfRemote('https://github.com/briar-systems/mach')).toBe('briar-systems/mach');
+    expect(repoOfRemote('https://gitlab.com/a/b')).toBeUndefined();
+  });
+
+  it('reads worktrees, status and branches', () => {
+    const wts = parseWorktrees('worktree /r\nHEAD abc\nbranch refs/heads/dev\n\nworktree /r/wt\nHEAD def\nbranch refs/heads/feat/2\nlocked\n');
+    expect(wts).toEqual([
+      { path: '/r', sha: 'abc', main: true, branch: 'dev' },
+      { path: '/r/wt', sha: 'def', main: false, branch: 'feat/2', locked: true },
+    ]);
+    expect(parseStatus('# branch.oid x\n# branch.upstream origin/dev\n# branch.ab +2 -1\n1 .M N... a\n? new\n')).toEqual({ dirty: 2, upstream: 'origin/dev', ahead: 2, behind: 1 });
+    expect(parseBranches('dev\tabc\torigin/dev\tbehind 3\t100\nold\tdef\torigin/old\tgone\t50\n')).toEqual([
+      { name: 'dev', sha: 'abc', committedAt: 100_000, upstream: 'origin/dev', behind: 3 },
+      { name: 'old', sha: 'def', committedAt: 50_000, upstream: 'origin/old', gone: true },
+    ]);
+  });
+});
+
+describe('config and logs', () => {
+  it('merges layers and refuses a malformed tier', () => {
+    const c = mergeConfig(DEFAULT_CONFIG, { poll: { active: 5 } });
+    expect(c.poll).toEqual({ ...DEFAULT_CONFIG.poll, active: 5 });
+    expect(() => mergeConfig(DEFAULT_CONFIG, { routing: { tiers: [{ name: 'x' }] } })).toThrow(/needs name/);
+  });
+
+  it('keeps error lines with their lead-up', () => {
+    const raw = Array.from({ length: 100 }, (_, i) => `2026-10-01T00:00:00.0000000Z line ${i}`).join('\n') + '\n2026-10-01T00:00:00.0000000Z ##[error]boom';
+    const out = trimLog(raw, { errors: true }).split('\n');
+    expect(out.at(-1)).toBe('##[error]boom');
+    expect(out[0]).toBe('… (line 81)');
+  });
+});
