@@ -152,7 +152,7 @@ function renderSummary() {
   const g = f.rates.graphql;
   const core = f.rates.core;
   $('summary').replaceChildren(
-    el('span', {}, el('b', {}, o.filter((w) => w.phase !== 'queued').length), ' active'),
+    el('span', {}, el('b', {}, o.filter((w) => !ATTENTION.has(w.phase) && w.phase !== 'queued').length), ' active'),
     att ? el('a', { class: 'bad', href: href('board', '', { phase: null }) }, el('b', {}, att), ' attention') : '',
     waiting ? el('a', { class: 'bad', href: href('inbox') }, el('b', {}, waiting), ' waiting on you') : '',
     core ? el('span', { class: 'dim', title: 'REST calls left this hour' }, `rest ${core.remaining}`) : '',

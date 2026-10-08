@@ -94,8 +94,8 @@ export function ci(main) {
       const fin = runs.filter((x) => done(x.run.state)).slice(0, 30).reverse();
       if (!fin.length) return empty('No finished runs.');
       return columns(
-        fin.map((x) => ({ label: `#${x.run.id % 10000}`, value: Math.round(length(x.run) / 60000), tip: `${x.run.workflow} · ${repoShort(x.repo)} ${x.run.branch}\n${x.run.state} · ${dur(length(x.run))}` })),
-        { tone: 'ci', height: 130, label: 'run length in minutes' },
+        fin.map((x) => ({ label: new Date(x.run.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), value: Math.round(length(x.run) / 60000), tip: `${x.run.workflow} · ${repoShort(x.repo)} ${x.run.branch}\n${x.run.state} · ${dur(length(x.run))}` })),
+        { tone: 'ready', height: 130, label: 'run length in minutes' },
       );
     })(),
     el('div', { class: 'dim small' }, 'minutes'),

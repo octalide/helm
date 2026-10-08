@@ -26,7 +26,7 @@ export function timeline(main) {
     el('span', { class: 'grow' }),
     legend(
       PHASES.filter((p) => p !== 'done' && p !== 'draft' && p !== 'blocked')
-        .map((p) => [p === 'queued' ? 'queued hatch' : PHASE[p].tone, p === 'working' ? 'working, draft' : p === 'failing' ? 'failing, blocked' : PHASE[p].label]),
+        .map((p) => [PHASE[p].tone, p === 'working' ? 'working, draft' : p === 'failing' ? 'failing, blocked' : PHASE[p].label]),
     ),
   );
   if (!rows.length) return main.replaceChildren(tools, empty(`Nothing moved in the last ${range}.`, 'Each work item draws a lane of the phases it went through.'));
@@ -59,7 +59,7 @@ export function timeline(main) {
           { class: 'hbars' },
           phases.map((p) => {
             const m = median(spans[p]);
-            return el('div', { class: 'hbar' }, el('span', { class: 'hbar-label' }, PHASE[p].label), el('span', { class: 'hbar-track' }, el('i', { class: `t-${PHASE[p].tone}${p === 'queued' ? ' hatch' : ''}`, style: { width: `${(100 * m) / longest}%` }, 'data-tip': `${PHASE[p].label}\nmedian ${dur(m)} over ${spans[p].length} stretches\nlongest ${dur(Math.max(...spans[p]))}` })), el('b', {}, dur(m)));
+            return el('div', { class: 'hbar' }, el('span', { class: 'hbar-label' }, PHASE[p].label), el('span', { class: 'hbar-track' }, el('i', { class: `t-${PHASE[p].tone}`, style: { width: `${(100 * m) / longest}%` }, 'data-tip': `${PHASE[p].label}\nmedian ${dur(m)} over ${spans[p].length} stretches\nlongest ${dur(Math.max(...spans[p]))}` })), el('b', {}, dur(m)));
           }),
         )
       : empty('No finished stretch in this window yet.'),

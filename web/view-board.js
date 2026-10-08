@@ -54,7 +54,7 @@ export function board(main) {
   }
   const ordered = [...lanes.values()].sort((a, b) => (a.key === '') - (b.key === '') || a.label.localeCompare(b.label));
 
-  const grid = el('div', { class: 'board', style: { gridTemplateColumns: `repeat(${cols.length}, minmax(232px, 1fr))` } });
+  const grid = el('div', { class: 'board', style: { gridTemplateColumns: `repeat(${cols.length}, minmax(176px, 1fr))` } });
   for (const c of cols) {
     const n = work.filter((w) => c.phases.includes(w.phase)).length;
     grid.append(el('div', { class: `bcol-head t-line-${c.tone}` }, el('span', {}, c.label), el('b', {}, n)));

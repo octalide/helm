@@ -80,9 +80,27 @@ export function meter(doneN, total, tip) {
   return el('span', { class: 'meter', 'data-tip': tip || `${doneN} of ${total}` }, el('i', { style: { width: `${pct}%` } }));
 }
 
+// a chart drawn at its container's real width, and drawn again when that width changes, so text is never stretched
+function responsive(draw, cls) {
+  const box = el('div', { class: `chart-box${cls ? ` ${cls}` : ''}` });
+  let last = 0;
+  const paint = () => {
+    const w = Math.round(box.clientWidth);
+    if (!w || w === last) return;
+    last = w;
+    box.replaceChildren(draw(w));
+  };
+  new ResizeObserver(paint).observe(box);
+  return box;
+}
+
 // a single-series column chart. points are { label, value, tip }, drawn left to right
 export function columns(points, opts = {}) {
-  const w = opts.width || 560;
+  return responsive((w) => drawColumns(points, { ...opts, width: w }));
+}
+
+function drawColumns(points, opts) {
+  const w = opts.width;
   const h = opts.height || 140;
   const pad = { l: 28, r: 6, t: 8, b: 20 };
   const max = Math.max(1, ...points.map((p) => p.value));
@@ -92,19 +110,19 @@ export function columns(points, opts = {}) {
   const band = inner / Math.max(1, points.length);
   const bw = Math.min(24, Math.max(3, band - 2));
   const y = (v) => pad.t + (h - pad.t - pad.b) * (1 - v / top);
-  const svg = el('svg', { class: 'chart', viewBox: `0 0 ${w} ${h}`, preserveAspectRatio: 'none', role: 'img', 'aria-label': opts.label || '' });
+  const svg = el('svg', { class: 'chart', viewBox: `0 0 ${w} ${h}`, width: w, height: h, role: 'img', 'aria-label': opts.label || '' });
   for (let v = 0; v <= top; v += step) {
     svg.append(el('line', { class: v ? 'grid' : 'base', x1: pad.l, x2: w - pad.r, y1: y(v), y2: y(v) }));
     svg.append(el('text', { class: 'axis', x: pad.l - 6, y: y(v) + 3, 'text-anchor': 'end' }, String(v)));
   }
-  const every = Math.ceil(points.length / 8);
+  const every = Math.ceil(points.length / Math.max(2, Math.floor(w / 70)));
   points.forEach((p, i) => {
     const x = pad.l + band * i + (band - bw) / 2;
     const top = y(p.value);
     const base = y(0);
     if (p.value > 0) svg.append(el('path', { class: `col t-${opts.tone || 'work'}`, d: roundTop(x, top, bw, base - top, Math.min(4, bw / 2)) }));
     svg.append(el('rect', { class: 'hit', x: pad.l + band * i, y: pad.t, width: band, height: h - pad.t - pad.b, 'data-tip': p.tip || `${p.label}\n${p.value}` }));
-    if (i % every === 0 || i === points.length - 1) svg.append(el('text', { class: 'axis', x: x + bw / 2, y: h - 6, 'text-anchor': 'middle' }, p.label));
+    if (i % every === 0) svg.append(el('text', { class: 'axis', x: x + bw / 2, y: h - 6, 'text-anchor': 'middle' }, p.label));
   });
   return svg;
 }
@@ -128,19 +146,23 @@ export function spark(values, opts = {}) {
   if (values.length < 2) return el('svg', { class: 'spark', viewBox: `0 0 ${w} ${h}` });
   const max = Math.max(1, ...values);
   const pts = values.map((v, i) => `${((w - 2) * i) / (values.length - 1) + 1},${h - 2 - ((h - 4) * v) / max}`);
-  return el('svg', { class: 'spark', viewBox: `0 0 ${w} ${h}`, preserveAspectRatio: 'none', 'aria-hidden': 'true' }, el('polyline', { points: pts.join(' ') }), el('circle', { cx: pts[pts.length - 1].split(',')[0], cy: pts[pts.length - 1].split(',')[1], r: 2.5 }));
+  return el('svg', { class: 'spark', viewBox: `0 0 ${w} ${h}`, width: w, height: h, 'aria-hidden': 'true' }, el('polyline', { points: pts.join(' ') }), el('circle', { cx: pts[pts.length - 1].split(',')[0], cy: pts[pts.length - 1].split(',')[1], r: 2.5 }));
 }
 
-// swimlanes over time: each row is { label, sub, href, segments: [{ phase, from, to }] }
+// swimlanes over time: each row is { label, segments: [{ phase, from, to }] }
 export function gantt(rows, from, to, opts = {}) {
-  const w = opts.width || 1000;
+  return responsive((w) => drawGantt(rows, from, to, { ...opts, width: Math.max(w, 480) }));
+}
+
+function drawGantt(rows, from, to, opts) {
+  const w = opts.width;
   const lane = 22;
   const head = 22;
   const labelW = opts.labelWidth || 0;
   const h = head + rows.length * lane + 4;
   const x = (t) => labelW + ((w - labelW - 8) * (Math.min(to, Math.max(from, t)) - from)) / (to - from);
-  const svg = el('svg', { class: 'chart gantt', viewBox: `0 0 ${w} ${h}`, width: '100%', height: h, preserveAspectRatio: 'none', role: 'img', 'aria-label': opts.label || 'timeline' });
-  for (const t of ticks(from, to)) {
+  const svg = el('svg', { class: 'chart gantt', viewBox: `0 0 ${w} ${h}`, width: w, height: h, role: 'img', 'aria-label': opts.label || 'timeline' });
+  for (const t of ticks(from, to, w - labelW)) {
     svg.append(el('line', { class: 'grid', x1: x(t.at), x2: x(t.at), y1: head - 4, y2: h }));
     svg.append(el('text', { class: 'axis', x: x(t.at) + 3, y: 12 }, t.label));
   }
@@ -152,7 +174,7 @@ export function gantt(rows, from, to, opts = {}) {
       const x1 = x(s.to);
       if (x1 - x0 < 0.5) continue;
       const tone = PHASE[s.phase]?.tone || 'queued';
-      svg.append(el('rect', { class: `seg t-${tone}${s.phase === 'queued' ? ' hatch' : ''}`, x: x0 + 1, y: y + 5, width: Math.max(1, x1 - x0 - 2), height: lane - 10, rx: Math.min(4, (x1 - x0) / 2), 'data-tip': `${r.label} · ${PHASE[s.phase]?.label || s.phase}\n${dur(s.to - s.from)}${s.open ? ' so far' : ''} · since ${new Date(s.from).toLocaleString()}` }));
+      svg.append(el('rect', { class: `seg t-${tone}`, x: x0 + 1, y: y + 5, width: Math.max(1, x1 - x0 - 2), height: lane - 10, rx: Math.min(4, (x1 - x0) / 2), 'data-tip': `${r.label} · ${PHASE[s.phase]?.label || s.phase}\n${dur(s.to - s.from)}${s.open ? ' so far' : ''} · since ${new Date(s.from).toLocaleString()}` }));
     }
   });
   const now = Date.now();
@@ -160,10 +182,12 @@ export function gantt(rows, from, to, opts = {}) {
   return svg;
 }
 
-function ticks(from, to) {
+function ticks(from, to, width = 1000) {
   const span = to - from;
   const hour = 3600_000;
-  const step = span <= 6 * hour ? hour : span <= 2 * 86400_000 ? 4 * hour : span <= 8 * 86400_000 ? 86400_000 : 4 * 86400_000;
+  // the finest step that keeps labels at least 80px apart
+  const steps = [hour, 2 * hour, 4 * hour, 6 * hour, 12 * hour, 86400_000, 2 * 86400_000, 4 * 86400_000, 7 * 86400_000];
+  const step = steps.find((s) => (s / span) * width >= 80) || steps[steps.length - 1];
   const out = [];
   const start = Math.ceil(from / step) * step;
   for (let t = start; t <= to; t += step) {

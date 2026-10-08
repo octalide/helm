@@ -93,7 +93,22 @@ The default tiers:
 
 ## Web page
 
-`http://127.0.0.1:7468/`. Decisions come first: questions agents are stopped on, choices they made without you, routing picks and stalls, each answered or dismissed in place. Then active work by session (phase, model, PR, CI progress, running and failed jobs with their logs), each repository's PRs, issues, runs, worktrees and branches, the activity feed and the live sessions. It updates live.
+`http://127.0.0.1:7468/`, or `/helm web`. It is a dashboard with a view per question, and each view updates live:
+
+| view | shows |
+|---|---|
+| Overview | active work as the headline, tiles for what waits on you, what needs attention, what is in CI, ready and done this week; the attention queue, runs in flight, every epic's progress, the pipeline by phase, throughput per day and each session |
+| Board | work as cards in phase columns (queued, working, draft, in ci, ready, attention, done), each with its agent, tier, plan progress and checks; lanes by session, epic, repository or tier |
+| Epics | the sub-issue tree across repositories, each epic with its rollup bar, each leaf with its phase, plan and agent; drill into any epic |
+| Timeline | a lane per work item of the phases it went through over 6 hours to 30 days, and the median time work spends in each phase |
+| CI | runs in flight with every job and step, pass rate and run length, each workflow's recent outcomes, and failed runs with their logs |
+| Agents | each live session's agents, their model and effort, and the work each is on |
+| Routing | picks per tier by outcome, the judge's confidence, and every pick with its reason |
+| Inbox | decisions: questions agents are stopped on, choices made without you, routing picks and stalls, each answered or dismissed in place |
+| Repos | each repository's PRs, issues, runs, worktrees and branches, and the GitHub budget left |
+| Activity | every event by day, by kind |
+
+Clicking a work item opens its detail: its phases with how long each took, its plan, CI, routing, decisions and worktree. Filters for repository, session, epic and tier, plus a search, apply to every view and live in the URL, so a filtered view can be bookmarked. `ctrl k` opens a palette that jumps to any view, issue, epic, repository or session. The digits open the views, `/` searches, `j` and `k` walk the cards, `t` toggles the theme, and `?` lists the keys.
 
 The page is served on 127.0.0.1 only. A request must name this server as its Host, and a write must come from this page.
 

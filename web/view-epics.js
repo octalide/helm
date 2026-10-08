@@ -32,7 +32,7 @@ function nodeRow(n, depth, from) {
   const toggle = epic && n.children.length ? el('button', { type: 'button', class: `fold${open ? ' open' : ''}`, 'aria-label': open ? 'fold' : 'unfold', 'aria-expanded': String(open), onclick: (e) => (e.preventDefault(), open ? folded.add(key) : folded.delete(key), store.emit()) }, '▸') : el('span', { class: 'fold none' });
   const status = epic ? el('span', { class: 'pct' }, `${pct(n.rollup)}%`) : n.phase ? phasePill(n.phase) : el('span', { class: 'pill t-none' }, 'open');
   const progress = epic ? rollupBar(n.rollup, 'thin') : n.plan ? el('span', { class: 'plan-cell' }, meter(n.plan.done, n.plan.total, `plan ${n.plan.done} of ${n.plan.total}`), el('span', { class: 'dim' }, `${n.plan.done}/${n.plan.total}`)) : '';
-  const who = [n.tier ? el('span', { class: 'chip tier' }, n.tier) : '', n.agent ? el('span', { class: 'agent live', 'data-tip': `agent ${n.agent}` }, 'agent') : ''];
+  const who = [n.tier ? el('span', { class: 'chip tier' }, n.tier) : '', n.agent && n.phase !== 'done' ? el('span', { class: 'agent live', 'data-tip': `agent ${n.agent}` }, 'agent') : ''];
   const row = el(
     'div',
     { class: `trow${epic ? ' epic' : ''}${n.state === 'closed' ? ' closed' : ''}`, style: { '--depth': depth } },
