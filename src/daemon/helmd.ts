@@ -17,7 +17,7 @@ import { emptyLedger, Ledger, type LedgerData } from './ledger.ts';
 import { discover, type Git, git as realGit, scan } from './local.ts';
 import { readJson, Saver, writeJson } from './persist.ts';
 import { emptyCache, type RepoCache, RepoPoller } from './poller.ts';
-import type { MatchContext } from './watch.ts';
+import { ended, expired, type MatchContext } from './watch.ts';
 
 export type DaemonDeps = {
   paths: HelmPaths;
@@ -223,7 +223,7 @@ export class Daemon {
     for (const s of gone) this.log(`session ${s.id} went quiet`);
     const now = this.now();
     for (const s of Object.values(this.ledger.data.subscriptions)) {
-      if (typeof s.until === 'object' && Date.parse(s.until.at) <= now) this.ledger.unsubscribe(s.id);
+      if (expired(s, now) || ended(s, s.repo ? this.pollers.get(s.repo)?.forge : undefined)) this.ledger.unsubscribe(s.id);
     }
     this.refreshViews();
   }
