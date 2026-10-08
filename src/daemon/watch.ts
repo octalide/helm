@@ -1,4 +1,4 @@
-import type { HelmEvent, Subscription } from '../core/types.ts';
+import type { ForgeState, HelmEvent, Subscription } from '../core/types.ts';
 
 // the item tags a subscription takes when it names none: what someone acts on, not housekeeping
 export const DEFAULT_ITEM_TAGS: Record<string, readonly string[]> = {
@@ -87,4 +87,17 @@ export function retiredBy(e: HelmEvent, s: Subscription): boolean {
 
 export function expired(s: Subscription, now: number): boolean {
   return typeof s.until === 'object' && Date.parse(s.until.at) <= now;
+}
+
+// whether what a subscription with an end waits on has ended by the forge's own state: its pr merged or closed, or its
+// issue closed under until closed. the event that would have retired it may have come while helm was not watching
+export function ended(s: Subscription, forge: ForgeState | undefined): boolean {
+  if (s.until === undefined || !forge) return false;
+  const scope = s.scope;
+  if (scope.kind === 'pr') {
+    const p = forge.pulls.find((x) => x.number === scope.number);
+    return p !== undefined && p.state !== 'open';
+  }
+  if (scope.kind === 'issue' && s.until === 'closed') return forge.issues.some((i) => i.number === scope.number && i.state === 'closed');
+  return false;
 }
