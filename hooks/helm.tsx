@@ -3,15 +3,17 @@ import { helmPaths, type PathEnv } from '../src/core/paths.ts';
 import { PROTOCOL, type StreamFrame } from '../src/core/protocol.ts';
 import { compareVersions, isRepoName, repoOfRemote } from '../src/core/repo.ts';
 import type { AgentRecord, AgentStatus, RepoName, SessionRole } from '../src/core/types.ts';
+import { EFFORTS } from '../src/core/types.ts';
 import { HelmClient, HelmError } from '../src/mod/client.ts';
+import { type DispatchPort, dispatchTool, issueAgent } from '../src/mod/dispatch.ts';
 import { Mailbox } from '../src/mod/mailbox.ts';
 import { type Tool, TOOLS } from '../src/mod/tools.ts';
 import { PLUGIN, ROLES, type Runtime, toolEnv } from './runtime.ts';
 
 type $ = EngineInterface;
 
-// what a tool that reaches the engine is handed: plain functions over $, built here
-export type Port = Record<string, never>;
+// what a tool that reaches the engine is handed: plain functions over $, built here per call
+type Port = DispatchPort;
 
 const HEARTBEAT_MS = 15_000;
 const RECONNECT_MS = 3_000;
@@ -74,8 +76,31 @@ async function bind($: $, r: Runtime): Promise<void> {
   await r.client.register({ id: r.session, cwd: await $.session.cwd(), role: r.role, ...(r.repo ? { repo: r.repo } : {}) });
 }
 
-function port(): Port {
-  return {};
+function port($: $): Port {
+  return {
+    now: Date.now,
+    spawn: async (a) => {
+      const r = await $.agent.spawn(a);
+      return r.deny !== undefined ? { deny: r.deny } : r.agentId ? { agentId: r.agentId } : {};
+    },
+    complete: async (a) => {
+      const r = await $.model.complete({ ...a, maxTokens: 400, effort: 'low', timeoutMs: 45_000 });
+      return r.isAnswered ? { text: r.text } : { failed: r.reason };
+    },
+  };
+}
+
+async function registerIssueAgents($: $): Promise<void> {
+  const prompt = await $.fs.read(`${$.plugin.root}/prompts/issue.md`);
+  for (const effort of EFFORTS) {
+    await $.agent.register({
+      name: issueAgent(PLUGIN, effort).split(':')[1]!,
+      description: `Implements one GitHub issue to a merge-ready PR at ${effort} effort. Started by helm dispatch only.`,
+      prompt,
+      effort,
+      disallowedTools: ['AskUserQuestion'],
+    });
+  }
 }
 
 // letters and change notices from helmd, for the life of this module; reconnects whenever helmd goes away
@@ -123,7 +148,7 @@ async function helpText(r: Runtime): Promise<string> {
 }
 
 export const register: Register = (on) => {
-  const tools: Tool<Port>[] = [...TOOLS];
+  const tools: Tool<Port>[] = [...TOOLS, dispatchTool(PLUGIN)];
 
   // outermost on every tool: letters waiting for the calling loop ride the result
   on('tool.call', async ($, e, next) => {
@@ -172,6 +197,7 @@ export const register: Register = (on) => {
 
     for (const t of tools) await $.tool.register({ name: t.name, description: t.description, inputSchema: t.inputSchema, isDeferred: !t.eager });
     await $.command.register({ name: PLUGIN, description: 'helm: status, role, web page' });
+    await registerIssueAgents($).catch((err: Error) => $.ui.log(`helm: issue agents not registered: ${err.message}`));
     try {
       await ensureDaemon($, client, version);
       await bind($, r);
@@ -229,13 +255,16 @@ export const register: Register = (on) => {
       if (!r) return { deny: 'helm is starting; call it again in a moment' };
       if (t.mainOnly && e.agentId !== undefined) return { deny: `helm ${t.name} is the session's own: report to whoever spawned you instead` };
       try {
-        const text = await t.run(toolEnv(r), e as unknown as Record<string, unknown>, e.agentId, port());
+        const text = await t.run(toolEnv(r), e as unknown as Record<string, unknown>, e.agentId, port($));
         return { result: [{ type: 'text', text }] };
       } catch (err) {
         return { deny: `helm ${t.name}: ${(err as Error).message}` };
       }
     }).catch(() => ({ deny: `helm ${t.name} failed inside its hook` }));
   }
+
+  // issue agents start through dispatch, which claims and routes them; the model never picks one itself
+  on('agent.offer', ($, e, next) => (e.agent.startsWith(`${PLUGIN}:issue-`) ? { isOffered: false } : next(e))).catch(($, e, next) => next(e));
 
   on('command.run', { command: PLUGIN }, async ($, e) => {
     const r = rt;
