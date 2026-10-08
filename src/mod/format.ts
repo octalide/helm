@@ -1,5 +1,7 @@
 import { isDone, isPassing, verdictOf } from '../core/checks.ts';
-import type { Branch, Check, Decision, Fleet, ForgeState, Issue, Job, LocalState, Pull, Run, Session, Subscription, Worktree, WorkView } from '../core/types.ts';
+import { rollupText } from '../core/tree.ts';
+import { selfWorked } from '../core/work.ts';
+import type { Branch, Check, Decision, Fleet, ForgeState, Issue, Job, LocalState, Pull, Run, Session, Subscription, TreeNode, Worktree, WorkView } from '../core/types.ts';
 
 export function ago(ms: number, now: number): string {
   const s = Math.max(0, Math.round((now - ms) / 1000));
@@ -36,15 +38,34 @@ export function jobLines(jobs: readonly Job[]): string[] {
 
 export function workLine(v: WorkView, home?: string): string {
   const parts = [
-    v.agent ? `agent ${v.agent} ${v.agentStatus ?? '?'}` : 'no agent',
+    v.agent ? `agent ${v.agent} ${v.agentStatus ?? '?'}` : selfWorked(v) ? 'worked by its session' : 'no agent',
     v.routing ? `${v.routing.tier ?? ''}${v.routing.tier ? ' ' : ''}${v.routing.model}/${v.routing.effort}` : '',
+    v.plan?.length ? `plan ${v.plan.filter((p) => p.done).length}/${v.plan.length}` : '',
     v.pull ? `pr #${v.pull.number}${v.pull.draft ? ' draft' : ''}` : '',
     v.checks.length ? checkSummary(v.checks) : '',
     v.worktree ? `${tidy(v.worktree.path, home)}${v.worktree.dirty ? ` dirty ${v.worktree.dirty}` : ''}` : '',
     v.decisions ? `${v.decisions} decision${v.decisions === 1 ? '' : 's'} open` : '',
     v.report ? `reported ${v.report.state}${v.report.note ? `: ${v.report.note}` : ''}` : '',
   ].filter(Boolean);
-  return `${v.repo}#${v.issue} [${v.phase}] ${v.title}\n  ${parts.join(' · ')}`;
+  const next = v.plan?.find((p) => !p.done);
+  return `${v.repo}#${v.issue} [${v.phase}] ${v.title}\n  ${parts.join(' · ')}${next ? `\n  next: ${next.text}` : ''}`;
+}
+
+// the hierarchy as an indented outline, each epic with what its subtree adds up to
+export function treeBlock(roots: readonly TreeNode[]): string {
+  if (!roots.length) return 'no epics: an issue with sub-issues in a watched repository is one';
+  const out: string[] = [];
+  const walk = (n: TreeNode, depth: number, from: string) => {
+    const pad = '  '.repeat(depth);
+    const name = n.repo === from ? `#${n.number}` : `${n.repo}#${n.number}`;
+    const tag = n.children.length || n.external ? 'epic' : (n.phase ?? (n.state === 'closed' ? 'done' : 'open'));
+    const who = [n.agent ? `agent ${n.agent}` : '', n.tier ?? '', n.plan ? `plan ${n.plan.done}/${n.plan.total}` : ''].filter(Boolean).join(' ');
+    const sum = n.children.length || n.external ? ` · ${rollupText(n.rollup)}${n.external ? ' (not watched)' : ''}` : '';
+    out.push(`${pad}${name} [${tag}] ${n.title}${who ? ` · ${who}` : ''}${sum}`);
+    for (const c of n.children) walk(c, depth + 1, n.repo);
+  };
+  for (const r of roots) walk(r, 0, '');
+  return out.join('\n');
 }
 
 export function workBlock(views: readonly WorkView[], home?: string): string {
@@ -53,7 +74,7 @@ export function workBlock(views: readonly WorkView[], home?: string): string {
 }
 
 export function issueLine(i: Issue): string {
-  const extra = [i.labels.length ? `[${i.labels.join(', ')}]` : '', i.comments ? `${i.comments} comments` : '', i.parent ? `parent #${i.parent}` : '', i.subIssues ? `sub ${i.subIssues.done}/${i.subIssues.total}` : '', i.assignees.length ? `@${i.assignees.join(' @')}` : '']
+  const extra = [i.labels.length ? `[${i.labels.join(', ')}]` : '', i.comments ? `${i.comments} comments` : '', i.parent ? `parent ${i.parent.repo}#${i.parent.number}` : '', i.subIssues ? `sub ${i.subIssues.done}/${i.subIssues.total}` : '', i.assignees.length ? `@${i.assignees.join(' @')}` : '']
     .filter(Boolean)
     .join(' ');
   return `#${i.number} ${i.title}${extra ? ` ${extra}` : ''}`;

@@ -6,6 +6,11 @@ export type Author = { login: string; bot: boolean };
 
 export type Note = { author: Author; at: string; url: string; text: string };
 
+export type IssueRef = { repo: RepoName; number: number };
+
+// one sub-issue as its parent lists it; its repository may be one helm does not poll
+export type Child = IssueRef & { title: string; url: string; state: 'open' | 'closed'; subIssues?: { total: number; done: number } };
+
 export type Issue = {
   number: number;
   title: string;
@@ -16,7 +21,7 @@ export type Issue = {
   author: Author;
   labels: string[];
   assignees: string[];
-  parent?: number;
+  parent?: IssueRef;
   subIssues?: { total: number; done: number };
   comments: number;
   lastComment?: Note;
@@ -101,6 +106,8 @@ export type ForgeState = {
   issues: Issue[];
   pulls: Pull[];
   runs: Run[];
+  // issue number -> its sub-issues, for every issue here that has any
+  children: Record<number, Child[]>;
   polledAt: number;
 };
 
@@ -189,6 +196,8 @@ export type ReportState = 'working' | 'waiting' | 'blocked' | 'ready' | 'stopped
 
 export type Report = { state: ReportState; note?: string; at: number };
 
+export type PlanStep = { text: string; done: boolean };
+
 // one issue in the ledger: queued in a session's backlog, then worked by one agent at a time
 export type Work = {
   repo: RepoName;
@@ -199,6 +208,10 @@ export type Work = {
   agent?: string;
   routing?: Routing;
   report?: Report;
+  // the agent's plan as it last reported it
+  plan?: PlanStep[];
+  // when the work entered each phase, oldest first
+  history?: { phase: Phase; at: number }[];
   queuedAt: number;
   claimedAt?: number;
   updatedAt: number;
@@ -219,6 +232,38 @@ export type WorkView = Work & {
   decisions: number;
   issueState?: 'open' | 'closed';
   issueUrl?: string;
+};
+
+// what a subtree of the hierarchy adds up to, counted over its leaves
+export type Rollup = {
+  total: number;
+  done: number;
+  // worked by an agent: working, draft, ci or ready
+  active: number;
+  // blocked, failing or stalled
+  attention: number;
+  ci: number;
+  // ready to merge, also counted active
+  ready: number;
+  queued: number;
+  // open with nobody on it
+  unowned: number;
+};
+
+export type TreeNode = IssueRef & {
+  title: string;
+  url: string;
+  state: 'open' | 'closed';
+  // the work item's phase when the ledger has one, done when closed, absent when open and unowned
+  phase?: Phase;
+  owner?: string;
+  agent?: string;
+  tier?: string;
+  plan?: { done: number; total: number };
+  // a sub-epic in a repository helm does not poll: counted from its summary, its children unknown
+  external?: boolean;
+  children: TreeNode[];
+  rollup: Rollup;
 };
 
 export type DecisionKind = 'routing' | 'question' | 'choice' | 'stall' | 'failure';
@@ -275,7 +320,7 @@ export type Subscription = {
   createdAt: number;
 };
 
-export type EventKind = 'issue' | 'pr' | 'ci' | 'work' | 'decision';
+export type EventKind = 'issue' | 'pr' | 'ci' | 'work' | 'decision' | 'epic';
 
 export type HelmEvent = {
   id: string;
@@ -290,7 +335,7 @@ export type HelmEvent = {
   sha?: string;
   tag?: string;
   // tags a filter reads: opened, closed, merged, comment, review, ready, draft, edited, labeled, settled, stalled,
-  // completed, success, failure, phase, decision, answered
+  // completed, success, failure, phase, decision, answered, progress, complete
   tags: string[];
   author?: Author;
   // one line, then detail lines
@@ -299,6 +344,8 @@ export type HelmEvent = {
   url?: string;
   // the session whose work it is, for the work scope
   owner?: string;
+  // the root epic a work event rolls up into, whose progress event speaks for it on the fleet scope
+  epic?: string;
 };
 
 // one delivery to a session, or to one agent of it
@@ -312,7 +359,8 @@ export type Letter = {
   at: number;
 };
 
-export type RepoView = { forge?: ForgeState; local?: LocalState; polling: PollStatus };
+// a lite view carries only polling and the runs in flight or just finished, what a pane draws its ci from
+export type RepoView = { forge?: ForgeState; local?: LocalState; polling: PollStatus; runs?: Run[] };
 
 export type PollStatus = {
   active: boolean;
@@ -330,6 +378,8 @@ export type Fleet = {
   decisions: Decision[];
   subscriptions: Subscription[];
   repos: Record<RepoName, RepoView>;
+  // every epic in the watched repositories that no other epic here holds, with its subtree
+  tree: TreeNode[];
   // the newest events, newest last; absent from a lite answer
   events?: HelmEvent[];
   rates: Record<string, { remaining: number; limit: number; resetAt: number }>;

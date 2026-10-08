@@ -1,4 +1,5 @@
 import { verdictOf } from '../core/checks.ts';
+import { selfWorked } from '../core/work.ts';
 import type { AgentStatus, Decision, ForgeState, Job, LocalState, Phase, Pull, Session, Work, WorkView } from '../core/types.ts';
 
 // the branch conventions an issue's work goes on: feat/12, fix/12, hotfix/12, or any prefix ending in the number
@@ -26,11 +27,14 @@ export function agentStatusOf(w: Work, sessions: ReadonlyMap<string, Session>, n
   return w.claimedAt !== undefined && now - w.claimedAt < CLAIM_GRACE_MS ? 'running' : 'gone';
 }
 
-export function phaseOf(w: Work, ctx: { pull?: Pull; agent?: AgentStatus; blocking: boolean; issueClosed: boolean }): Phase {
+const isLive = (s: Session | undefined) => s !== undefined && !s.gone;
+
+export function phaseOf(w: Work, ctx: { pull?: Pull; agent?: AgentStatus; ownerLive?: boolean; blocking: boolean; issueClosed: boolean }): Phase {
   if (w.finished || ctx.issueClosed || ctx.pull?.state === 'merged') return 'done';
   if (ctx.blocking || w.report?.state === 'blocked') return 'blocked';
-  // an agent that ended its turn to wait on a delivery is still on the work
-  const active = (ctx.agent !== undefined && LIVE.has(ctx.agent)) || w.report?.state === 'waiting';
+  // an agent that ended its turn to wait on a delivery is still on the work, and so is a live session working it itself
+  const self = selfWorked(w);
+  const active = (ctx.agent !== undefined && LIVE.has(ctx.agent)) || w.report?.state === 'waiting' || (self && ctx.ownerLive === true);
   const pull = ctx.pull?.state === 'open' ? ctx.pull : undefined;
   if (pull) {
     const verdict = verdictOf(pull.checks);
@@ -39,7 +43,7 @@ export function phaseOf(w: Work, ctx: { pull?: Pull; agent?: AgentStatus; blocki
     if (verdict === 'pending') return 'ci';
     return 'ready';
   }
-  if (w.agent === undefined) return 'queued';
+  if (w.agent === undefined && !self) return 'queued';
   return active ? 'working' : 'stalled';
 }
 
@@ -62,7 +66,7 @@ export function viewOf(
   return {
     ...w,
     ...(issue && w.title !== issue.title ? { title: issue.title } : {}),
-    phase: phaseOf(w, { pull, agent: agentStatus, blocking: mine.some((d) => d.blocking), issueClosed: issue?.state === 'closed' }),
+    phase: phaseOf(w, { pull, agent: agentStatus, ownerLive: isLive(w.owner ? sessions.get(w.owner) : undefined), blocking: mine.some((d) => d.blocking), issueClosed: issue?.state === 'closed' }),
     ...(agentStatus ? { agentStatus } : {}),
     ...(pull ? { pull: { number: pull.number, url: pull.url, draft: pull.draft, state: pull.state, head: pull.head, sha: pull.sha } } : {}),
     verdict: verdictOf(checks),

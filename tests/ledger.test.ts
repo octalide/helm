@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { hasWorker } from '../src/core/work.ts';
 import { phaseOf, viewOf } from '../src/daemon/derive.ts';
 import { ClaimError, emptyLedger, Ledger } from '../src/daemon/ledger.ts';
 import { check, forge, pull, T0 } from './fixtures.ts';
@@ -27,6 +28,19 @@ describe('ledger', () => {
     l.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'x' }, 'one');
     expect(() => l.claim({ session: 'B', repo: 'o/r', issue: 1 }, undefined)).toThrow(ClaimError);
     expect(l.claim({ session: 'B', repo: 'o/r', issue: 1, force: true }, undefined).owner).toBe('B');
+  });
+
+  it('keeps the reported plan and each phase change once', () => {
+    const { l, tick } = ledger();
+    l.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    l.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'x' }, 'one');
+    l.report({ session: 'A', agent: 'x', repo: 'o/r', issue: 1, state: 'working', plan: [{ text: 'a', done: true }, { text: 'b', done: false }] });
+    expect(l.data.work['o/r#1']!.plan).toEqual([{ text: 'a', done: true }, { text: 'b', done: false }]);
+    l.phase('o/r', 1, 'working');
+    tick(1000);
+    l.phase('o/r', 1, 'working');
+    l.phase('o/r', 1, 'ci');
+    expect(l.data.work['o/r#1']!.history).toEqual([{ phase: 'working', at: T0 }, { phase: 'ci', at: T0 + 1000 }]);
   });
 
   it('hands a letter out once', () => {
@@ -71,6 +85,16 @@ describe('phase', () => {
     const a = { ...w, agent: 'x' };
     expect(phaseOf({ ...a, report: { state: 'waiting', at: T0 } }, { agent: 'completed', pull: pull(101, { draft: true }), blocking: false, issueClosed: false })).toBe('draft');
     expect(phaseOf(a, { agent: 'gone', blocking: false, issueClosed: false })).toBe('stalled');
+  });
+
+  it('counts a live session working an issue itself as its worker', () => {
+    const self = { ...w, owner: 'A', report: { state: 'working' as const, at: T0 } };
+    expect(phaseOf(self, { ownerLive: true, blocking: false, issueClosed: false })).toBe('working');
+    expect(phaseOf(self, { ownerLive: true, pull: pull(101, { draft: true }), blocking: false, issueClosed: false })).toBe('draft');
+    expect(phaseOf(self, { ownerLive: false, pull: pull(101, { draft: true }), blocking: false, issueClosed: false })).toBe('stalled');
+    expect(phaseOf({ ...w, owner: 'A' }, { ownerLive: true, blocking: false, issueClosed: false })).toBe('queued');
+    // a repository with such work polls as active
+    expect([hasWorker(self), hasWorker({ ...w, agent: 'x' }), hasWorker({ ...w, owner: 'A' })]).toEqual([true, true, false]);
   });
 
   it('finds the pr by closing reference or branch and the worktree by branch', () => {

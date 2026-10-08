@@ -1,9 +1,10 @@
 import { workKey } from '../core/protocol.ts';
 import { describeScope, parseScope } from '../core/scope.ts';
+import { findNode } from '../core/tree.ts';
 import type { CiFilter, ReportState, RepoName, Until } from '../core/types.ts';
 import type { HelmClient } from './client.ts';
 import { HelmError } from './client.ts';
-import { decisionLine, fleetBlock, forgeBlock, jobLines, localBlock, pullLine, sessionLine, subscriptionLine, workBlock } from './format.ts';
+import { decisionLine, fleetBlock, forgeBlock, jobLines, localBlock, pullLine, sessionLine, subscriptionLine, treeBlock, workBlock } from './format.ts';
 
 export type ToolEnv = {
   client: HelmClient;
@@ -76,11 +77,11 @@ export const TOOLS: Tool[] = [
     name: 'view',
     eager: true,
     description:
-      'Read forge and machine state from helm instead of running gh or git: work (this session, or fleet for every session), issues (open, optional label), issue (one, with body and comments), prs (open, with checks), pr (one, with its jobs live), runs (recent workflow runs), worktrees, branches, decisions, sessions. Answers from a shared cache that one poller per repository keeps fresh, so it costs no rate limit.',
+      'Read forge and machine state from helm instead of running gh or git: work (this session, or fleet for every session), tree (epics and their sub-issues with progress rolled up, across repositories; number narrows it to one subtree), issues (open, optional label), issue (one, with body and comments), prs (open, with checks), pr (one, with its jobs live), runs (recent workflow runs), worktrees, branches, decisions, sessions. Answers from a shared cache that one poller per repository keeps fresh, so it costs no rate limit.',
     inputSchema: {
       type: 'object',
       properties: {
-        what: { type: 'string', enum: ['work', 'fleet', 'issues', 'issue', 'prs', 'pr', 'runs', 'worktrees', 'branches', 'decisions', 'sessions'] },
+        what: { type: 'string', enum: ['work', 'fleet', 'tree', 'issues', 'issue', 'prs', 'pr', 'runs', 'worktrees', 'branches', 'decisions', 'sessions'] },
         repo: repoProp,
         number: { type: 'number', description: 'issue or pr number, for issue and pr' },
         label: { type: 'string', description: 'issues: only those with this label' },
@@ -90,6 +91,14 @@ export const TOOLS: Tool[] = [
     async run(env, input) {
       const what = str(input.what) ?? 'work';
       const now = env.now();
+      if (what === 'tree') {
+        const f = await env.client.fleet(true);
+        const n = int(input.number);
+        if (n === undefined) return treeBlock(input.repo ? f.tree.filter((t) => t.repo === env.repo(input.repo)) : f.tree);
+        const hit = findNode(f.tree, env.repo(input.repo), n);
+        if (!hit) return `${env.repo(input.repo)}#${n} is in no epic helm sees`;
+        return [...(hit.path.length ? [`under ${hit.path.map((p) => `${p.repo}#${p.number}`).join(' › ')}`] : []), treeBlock([hit.node])].join('\n');
+      }
       if (what === 'work' || what === 'fleet' || what === 'decisions' || what === 'sessions') {
         const f = await env.client.fleet();
         if (what === 'fleet') return fleetBlock(f, env.session(), env.home);
@@ -203,7 +212,7 @@ export const TOOLS: Tool[] = [
     name: 'report',
     eager: true,
     description:
-      'Tell helm where your work on an issue stands, so the person and the session that owns it can track it. Call it with working when you start an issue (this claims it for you), waiting when you end your turn to wait for CI, ready when the PR is ready and green, blocked with a question when you cannot continue without a decision (the question goes to the decision inbox; the answer resumes you), stopped when you stop for any other reason, abandoned when told to. choices lists decisions you made that the issue did not settle, logged for the person to review.',
+      'Tell helm where your work on an issue stands, so the person and the session that owns it can track it. Call it with working when you start an issue (this claims it for you), waiting when you end your turn to wait for CI, ready when the PR is ready and green, blocked with a question when you cannot continue without a decision (the question goes to the decision inbox; the answer resumes you), stopped when you stop for any other reason, abandoned when told to. choices lists decisions you made that the issue did not settle, logged for the person to review. plan is your plan as it stands, every step with whether it is done: send it whole each time it changes, so the person sees your progress.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -217,6 +226,11 @@ export const TOOLS: Tool[] = [
           required: ['title', 'body'],
         },
         choices: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, body: { type: 'string' } }, required: ['title', 'body'] } },
+        plan: {
+          type: 'array',
+          description: 'the whole plan, in order, each step one short line',
+          items: { type: 'object', properties: { text: { type: 'string' }, done: { type: 'boolean' } }, required: ['text', 'done'] },
+        },
       },
       required: ['issue', 'state'],
     },
@@ -230,6 +244,7 @@ export const TOOLS: Tool[] = [
       if (state === 'working') await env.client.claim({ session: env.session(), repo, issue, ...(agent ? { agent } : {}) });
       const q = input.question as { title?: unknown; body?: unknown; options?: unknown } | undefined;
       const choices = Array.isArray(input.choices) ? (input.choices as { title?: unknown; body?: unknown }[]) : [];
+      const plan = Array.isArray(input.plan) ? (input.plan as { text?: unknown; done?: unknown }[]).map((p) => ({ text: String(p.text ?? ''), done: p.done === true })).filter((p) => p.text) : undefined;
       const out = await env.client.report({
         session: env.session(),
         repo,
@@ -239,6 +254,7 @@ export const TOOLS: Tool[] = [
         ...(str(input.note) ? { note: str(input.note)! } : {}),
         ...(q ? { question: { title: String(q.title ?? ''), body: String(q.body ?? ''), ...(Array.isArray(q.options) ? { options: q.options.map(String) } : {}) } } : {}),
         ...(choices.length ? { choices: choices.map((c) => ({ title: String(c.title ?? ''), body: String(c.body ?? '') })) } : {}),
+        ...(plan ? { plan } : {}),
       });
       const asked = out.decisions.filter((d) => d.blocking);
       return [

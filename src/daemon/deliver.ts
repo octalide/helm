@@ -39,7 +39,7 @@ export function route(events: readonly HelmEvent[], subs: readonly Subscription[
 export function letterText(items: readonly { event: HelmEvent; subs: string[] }[]): string {
   const groups = new Map<string, string[]>();
   for (const { event: e, subs } of items) {
-    const head = e.kind === 'work' ? 'work' : e.kind === 'decision' ? 'decision' : (e.repo ?? 'helm');
+    const head = e.kind === 'work' || e.kind === 'decision' || e.kind === 'epic' ? e.kind : (e.repo ?? 'helm');
     const lines = groups.get(head) ?? [];
     lines.push(e.text);
     for (const d of e.detail ?? []) lines.push(`  ${d}`);

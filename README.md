@@ -7,13 +7,13 @@ It is built for one way of working: a coordinator session, a session per reposit
 ## Install
 
 ```
-/plugin install helm --marketplace octalide/helm
+/plugin install helm --marketplace octalide/helm@main
 ```
 
 or from a shell:
 
 ```sh
-claude plugin marketplace add octalide/helm
+claude plugin marketplace add octalide/helm@main
 claude plugin install helm@helm
 ```
 
@@ -44,23 +44,36 @@ local git (worktrees, branches) ─┤
 A session in a repository is a **repo** session for it. Set the role with `HELM_ROLE=coordinator|repo|other` at launch, or with `/helm role coordinator`.
 
 - **Repo session.** Owns a repository's issues. It queues them with `backlog`, starts agents with `dispatch`, and hears its own work move (`[helm work]` deliveries) without polling.
-- **Coordinator.** Sees the fleet (`view` with `what: fleet`), hears every phase change and decision, and talks to repository sessions with SendMessage.
-- **Issue agent.** Started only by `dispatch`. It reports as it goes, waits on CI by subscribing and ending its turn, and stops with a question that lands in the decision inbox. The answer resumes it.
+- **Coordinator.** Sees the fleet (`view` with `what: fleet` or `what: tree`), hears each epic's progress, every decision and any work that needs someone, and talks to repository sessions with SendMessage.
+- **Issue agent.** Started only by `dispatch`. It reports as it goes, its plan with each step's progress among it, waits on CI by subscribing and ending its turn, and stops with a question that lands in the decision inbox. The answer resumes it.
 
 ## Tools
 
 | tool | does |
 |---|---|
 | `status` | this session's role, work, open decisions, subscriptions and letters in flight |
-| `view` | work, fleet, issues, issue, prs, pr (with live jobs), runs, worktrees, branches, decisions, sessions, from the shared cache |
+| `view` | work, fleet, tree (epics and sub-issues with progress rolled up), issues, issue, prs, pr (with live jobs), runs, worktrees, branches, decisions, sessions, from the shared cache |
 | `log` | a CI job's log trimmed to its errors, a grep or a tail; or every failed job of a run |
 | `watch` | subscribe to a repository, issue, PR, branch, run or tag. A subagent's subscription delivers to that subagent |
-| `report` | where an agent's work stands: working (claims the issue), waiting, blocked with a question, ready, stopped, abandoned, plus choices made without the person |
+| `report` | where an agent's work stands: working (claims the issue), waiting, blocked with a question, ready, stopped, abandoned, plus its plan and choices made without the person |
 | `dispatch` | start an issue agent per issue: claim, route to a tier, spawn, log the pick |
 | `backlog` | the session's queue of issues |
 | `decide` | list, answer or dismiss decisions |
 
 `/helm` shows the session's binding, and `/helm pane`, `/helm web`, `/helm role …` and `/helm restart` do what they say.
+
+## Pane
+
+`/helm pane` opens a dashboard beside the transcript, with four tabs. Each tab key works while the pane has the focus.
+
+| key | tab | shows |
+|---|---|---|
+| `1` | Work | the session's work, or for a coordinator every session's: a bar of it by phase, then each item with its plan progress and next step, its checks with the running step or the failed checks, and its agent, tier and PR |
+| `2` | Epics | each epic touching the session, with its percent, rollup bar and counts, and the work moving under it |
+| `3` | CI | runs in flight with their job bar and running steps, then runs finished in the last half hour |
+| `4` | Inbox | the session's open decisions; an option answers one in place, and `dismiss` or `reviewed` closes it. A written answer goes on the web page |
+
+Above the prompt, one line appears while something needs you, and the status line counts work in progress.
 
 ## Delivery
 
@@ -71,6 +84,12 @@ CI arrives as one verdict per PR head (`ci settled success` or `failure`, naming
 ## Phases
 
 Work moves through `queued → working → draft → ci → ready → done`, with `failing`, `blocked` and `stalled` beside them. Phases are derived, not set: from the agent's reports, whether its agent is alive, the PR that closes the issue or sits on its branch, and that PR's checks. A stalled item (no live agent, work not done) and a stalled or failing CI raise a decision on their own, and clear it once the condition passes.
+
+## Hierarchy
+
+GitHub's sub-issues draw the tree. Every open issue with sub-issues that no other issue in a watched repository holds is a root epic, and each node joins its work item: phase, agent, tier and plan progress. Sub-issues in other repositories nest under their parent, and a sub-epic in a repository helm does not poll is counted from its summary. Each epic rolls up its leaves: done, active, in CI, ready, needing attention, queued and unowned. Sub-issues are read again only when their parent moved, or every 10 minutes.
+
+Each work item keeps when it entered each phase, and finished work stays 30 days, so the page can draw a timeline. A coordinator hears an epic as one `[helm epic]` delivery whenever anything under it moves, carrying its rollup and every phase change under it in that batch, instead of a delivery per child. Work that needs someone still arrives at once.
 
 ## Routing
 
@@ -87,7 +106,22 @@ The default tiers:
 
 ## Web page
 
-`http://127.0.0.1:7468/`. Decisions come first: questions agents are stopped on, choices they made without you, routing picks and stalls, each answered or dismissed in place. Then active work by session (phase, model, PR, CI progress, running and failed jobs with their logs), each repository's PRs, issues, runs, worktrees and branches, the activity feed and the live sessions. It updates live.
+`http://127.0.0.1:7468/`, or `/helm web`. It is a dashboard with a view per question, and each view updates live:
+
+| view | shows |
+|---|---|
+| Overview | active work as the headline, tiles for what waits on you, what needs attention, what is in CI, ready and done this week; the attention queue, runs in flight, every epic's progress, the pipeline by phase, throughput per day and each session |
+| Board | work as cards in phase columns (queued, working, draft, in ci, ready, attention, done), each with its agent, tier, plan progress and checks; lanes by session, epic, repository or tier |
+| Epics | the sub-issue tree across repositories, each epic with its rollup bar, each leaf with its phase, plan and agent; drill into any epic |
+| Timeline | a lane per work item of the phases it went through over 6 hours to 30 days, and the median time work spends in each phase |
+| CI | runs in flight with every job and step, pass rate and run length, each workflow's recent outcomes, and failed runs with their logs |
+| Agents | each live session's agents, their model and effort, and the work each is on |
+| Routing | picks per tier by outcome, the judge's confidence, and every pick with its reason |
+| Inbox | decisions: questions agents are stopped on, choices made without you, routing picks and stalls, each answered or dismissed in place |
+| Repos | each repository's PRs, issues, runs, worktrees and branches, and the GitHub budget left |
+| Activity | every event by day, by kind |
+
+Clicking a work item opens its detail: its phases with how long each took, its plan, CI, routing, decisions and worktree. Filters for repository, session, epic and tier, plus a search, apply to every view and live in the URL, so a filtered view can be bookmarked. `ctrl k` opens a palette that jumps to any view, issue, epic, repository or session. The digits open the views, `/` searches, `j` and `k` walk the cards, `t` toggles the theme, and `?` lists the keys.
 
 The page is served on 127.0.0.1 only. A request must name this server as its Host, and a write must come from this page.
 

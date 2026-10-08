@@ -1,12 +1,17 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { isDone, verdictOf } from '../core/checks.ts';
 import { type Config, mergeConfig, repoLayer } from '../core/config.ts';
 import type { AnswerBody, Answered, ClaimBody, ConfigView, DecisionBody, IssueDetail, QueueBody, RegisterBody, ReportBody, StreamFrame, SubscribeBody } from '../core/protocol.ts';
 import { workKey } from '../core/protocol.ts';
 import type { HelmPaths } from '../core/paths.ts';
-import type { AgentRecord, Decision, Fleet, ForgeState, HelmEvent, Letter, LocalState, Phase, PollStatus, RepoName, RepoView, Session, SessionRole, Subscription, WorkView } from '../core/types.ts';
+import type { AgentRecord, Decision, Fleet, ForgeState, HelmEvent, Letter, LocalState, Phase, PollStatus, RepoName, RepoView, Session, SessionRole, Subscription, TreeNode, WorkView } from '../core/types.ts';
 import { route } from './deliver.ts';
+import { buildTree } from '../core/tree.ts';
+import { hasWorker, selfWorked } from '../core/work.ts';
 import { pullFor, viewOf } from './derive.ts';
+import { verdictEvent } from './events.ts';
+import { epicEvents, rootsOf } from './epics.ts';
 import type { GitHub } from './github.ts';
 import { emptyLedger, Ledger, type LedgerData } from './ledger.ts';
 import { discover, type Git, git as realGit, scan } from './local.ts';
@@ -31,6 +36,10 @@ type Poll = PollStatus & { due: number; running: boolean };
 // how many repositories poll at once
 const POLL_CONCURRENCY = 3;
 // a repository asked about by a tool or the page stays polled this long after the last ask
+const LITE_DONE_MS = 24 * 3600_000;
+// runs a lite view carries: those in flight and those finished this recently, newest first
+const LITE_RUNS_MS = 30 * 60_000;
+const LITE_RUNS = 8;
 const ASKED_MS = 30 * 60_000;
 // checkouts are searched for again this often
 const DISCOVER_MS = 10 * 60_000;
@@ -57,6 +66,8 @@ export class Daemon {
   private readonly polls = new Map<RepoName, Poll>();
   private readonly asked = new Map<RepoName, number>();
   private phases?: Map<string, Phase>;
+  // root epic -> its rollup when last looked at
+  private rollups?: Map<string, string>;
   private readonly streams = new Map<string, Set<(f: StreamFrame) => void>>();
   private readonly watchers = new Set<(f: StreamFrame) => void>();
   private readonly timers: ReturnType<typeof setInterval>[] = [];
@@ -115,7 +126,7 @@ export class Daemon {
   private active(repo: RepoName): boolean {
     if (this.pollers.get(repo)?.busy()) return true;
     const d = this.ledger.data;
-    if (Object.values(d.work).some((w) => w.repo === repo && !w.finished && w.agent)) return true;
+    if (Object.values(d.work).some((w) => w.repo === repo && !w.finished && hasWorker(w))) return true;
     return Object.values(d.subscriptions).some((s) => s.repo === repo && s.scope.kind !== 'repo');
   }
 
@@ -264,10 +275,11 @@ export class Daemon {
     return { protectedBranches: new Set(['main', 'dev', ...(def ? [def] : [])]) };
   }
 
-  private dispatch(events: HelmEvent[]): void {
+  // events to every subscription that takes them; to only the given ones for a catch-up, which the log already holds
+  private dispatch(events: HelmEvent[], only?: Subscription[]): void {
     if (!events.length) return;
-    this.ledger.record(events);
-    const subs = Object.values(this.ledger.data.subscriptions);
+    if (!only) this.ledger.record(events);
+    const subs = only ?? Object.values(this.ledger.data.subscriptions);
     // events of different repositories match against different protected branches
     const byRepo = new Map<string, HelmEvent[]>();
     for (const e of events) byRepo.set(e.repo ?? '', [...(byRepo.get(e.repo ?? '') ?? []), e]);
@@ -310,6 +322,7 @@ export class Daemon {
     for (const v of views) {
       const key = workKey(v.repo, v.issue);
       next.set(key, v.phase);
+      this.ledger.phase(v.repo, v.issue, v.phase);
       const was = before.get(key);
       const stallKey = `stall:work:${key}`;
       if (v.phase === 'stalled') {
@@ -334,7 +347,7 @@ export class Daemon {
         tags: ['phase', v.phase],
         text: `${key} ${was ?? 'new'} → ${v.phase}: ${v.title}`,
         detail: [
-          [v.agent ? `agent ${v.agent} (${v.agentStatus ?? '?'})` : 'no agent', v.routing ? `${v.routing.model}/${v.routing.effort}` : '', v.pull ? `pr #${v.pull.number}` : '', v.verdict !== 'none' ? `ci ${v.verdict}` : '']
+          [v.agent ? `agent ${v.agent} (${v.agentStatus ?? '?'})` : selfWorked(v) ? 'worked by its session' : 'no agent', v.routing ? `${v.routing.model}/${v.routing.effort}` : '', v.pull ? `pr #${v.pull.number}` : '', v.verdict !== 'none' ? `ci ${v.verdict}` : '']
             .filter(Boolean)
             .join(' · '),
           ...(v.report?.note ? [`report: ${v.report.note}`] : []),
@@ -344,7 +357,19 @@ export class Daemon {
       });
     }
     this.phases = next;
-    this.dispatch(events);
+    const tree = this.tree(views);
+    const roots = rootsOf(tree);
+    for (const e of events) {
+      const root = roots.get(workKey(e.repo!, e.issue!));
+      if (root) e.epic = root;
+    }
+    const epics = epicEvents(tree, this.rollups, events, this.now());
+    this.rollups = epics.seen;
+    this.dispatch([...events, ...epics.events]);
+  }
+
+  private tree(work: readonly WorkView[]): TreeNode[] {
+    return buildTree([...this.pollers.values()].flatMap((p) => (p.forge ? [p.forge] : [])), work);
   }
 
   workViews(): WorkView[] {
@@ -359,11 +384,14 @@ export class Daemon {
   fleet(lite = false): Fleet {
     const d = this.ledger.data;
     const repos: Record<RepoName, RepoView> = {};
-    for (const repo of this.watched()) repos[repo] = lite ? { polling: this.repoView(repo).polling } : this.repoView(repo);
+    for (const repo of this.watched()) repos[repo] = lite ? this.liteView(repo) : this.repoView(repo);
+    const work = this.workViews();
     return {
       version: this.version,
       sessions: Object.values(d.sessions).sort((a, b) => b.seenAt - a.seenAt),
-      work: this.workViews(),
+      // a pane has no use for work finished before today
+      work: lite ? work.filter((w) => !w.finished || this.now() - w.finished.at < LITE_DONE_MS) : work,
+      tree: this.tree(work),
       decisions: Object.values(d.decisions).sort((a, b) => b.createdAt - a.createdAt),
       subscriptions: Object.values(d.subscriptions),
       repos,
@@ -382,6 +410,12 @@ export class Daemon {
       ...(local ? { local } : {}),
       polling: st ? { active: st.active, interval: st.interval, failures: st.failures, ...(st.lastPoll ? { lastPoll: st.lastPoll } : {}), ...(st.lastChange ? { lastChange: st.lastChange } : {}), ...(st.error ? { error: st.error } : {}) } : { active: false, interval: 0, failures: 0 },
     };
+  }
+
+  private liteView(repo: RepoName): RepoView {
+    const now = this.now();
+    const runs = (this.pollers.get(repo)?.forge?.runs ?? []).filter((r) => !isDone(r.state) || now - Date.parse(r.updatedAt) < LITE_RUNS_MS).slice(0, LITE_RUNS);
+    return { polling: this.repoView(repo).polling, runs };
   }
 
   // a repository a caller asks about is polled from now on, and read at once the first time
@@ -418,10 +452,22 @@ export class Daemon {
     return this.ledger.setRole(id, role, repo);
   }
 
-  subscribe(b: SubscribeBody): Subscription {
+  // a new subscription polls its repository, and one on a pr whose head ci has already settled hears that verdict
+  // now, alone: the event that announced it fired before the subscription existed
+  async subscribe(b: SubscribeBody): Promise<Subscription> {
     const sub = this.ledger.subscribe(b);
-    if (sub.repo) void this.ask(sub.repo);
+    if (sub.repo) await this.catchUp(sub, sub.repo);
     return sub;
+  }
+
+  private async catchUp(sub: Subscription, repo: RepoName): Promise<void> {
+    await this.ask(repo).catch(() => undefined);
+    if (sub.scope.kind !== 'pr' || sub.ci === 'none') return;
+    const number = sub.scope.number;
+    const pull = this.forgeOf(repo)?.pulls.find((p) => p.number === number && p.state === 'open');
+    const verdict = pull ? verdictOf(pull.checks) : 'none';
+    if (!pull || (verdict !== 'success' && verdict !== 'failure')) return;
+    this.dispatch([verdictEvent(repo, pull, verdict, this.now())], [sub]);
   }
 
   queue(b: QueueBody): ReturnType<Ledger['queue']> {

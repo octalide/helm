@@ -1,4 +1,4 @@
-import type { Author, Check, CheckState, Issue, Job, Note, Pull, Run, Step } from '../core/types.ts';
+import type { Author, Check, CheckState, Child, Issue, Job, Note, Pull, Run, Step } from '../core/types.ts';
 
 const NOTE = 'author{login __typename} createdAt url bodyText';
 
@@ -8,12 +8,13 @@ export const SNAPSHOT_QUERY = `query($owner:String!,$name:String!){
     issues(states:OPEN,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
       number title url createdAt updatedAt author{login __typename}
       labels(first:20){nodes{name}} assignees(first:5){nodes{login}}
-      parent{number} subIssuesSummary{total completed}
+      parent{number repository{nameWithOwner}} subIssuesSummary{total completed}
       comments(last:1){totalCount nodes{${NOTE}}}
     }}
     closedIssues:issues(states:CLOSED,first:20,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
       number title url createdAt updatedAt closedAt stateReason author{login __typename}
       labels(first:20){nodes{name}} comments{totalCount}
+      parent{number repository{nameWithOwner}} subIssuesSummary{total completed}
     }}
     pullRequests(states:OPEN,first:50,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
       number title url isDraft createdAt updatedAt author{login __typename}
@@ -65,7 +66,7 @@ type GqlIssue = {
   author: GqlAuthor;
   labels: GqlConnection<{ name: string }>;
   assignees?: GqlConnection<{ login: string }>;
-  parent?: { number: number } | null;
+  parent?: { number: number; repository: { nameWithOwner: string } } | null;
   subIssuesSummary?: { total: number; completed: number };
   comments: GqlCount<GqlNote>;
 };
@@ -159,6 +160,10 @@ function check(c: GqlCheck): Check {
   };
 }
 
+function summary(s: { total: number; completed: number } | undefined): { subIssues?: { total: number; done: number } } {
+  return s && s.total > 0 ? { subIssues: { total: s.total, done: s.completed } } : {};
+}
+
 function issue(i: GqlIssue, state: 'open' | 'closed'): Issue {
   return {
     number: i.number,
@@ -169,8 +174,8 @@ function issue(i: GqlIssue, state: 'open' | 'closed'): Issue {
     author: author(i.author),
     labels: i.labels.nodes.map((l) => l.name).sort(),
     assignees: (i.assignees?.nodes ?? []).map((a) => a.login),
-    ...(i.parent ? { parent: i.parent.number } : {}),
-    ...(i.subIssuesSummary && i.subIssuesSummary.total > 0 ? { subIssues: { total: i.subIssuesSummary.total, done: i.subIssuesSummary.completed } } : {}),
+    ...(i.parent ? { parent: { repo: i.parent.repository.nameWithOwner, number: i.parent.number } } : {}),
+    ...(summary(i.subIssuesSummary)),
     comments: i.comments.totalCount ?? 0,
     ...(i.comments.nodes?.[0] ? { lastComment: note(i.comments.nodes[0]) } : {}),
     createdAt: i.createdAt,
@@ -229,6 +234,31 @@ type RestRun = {
   created_at: string;
   updated_at: string;
 };
+
+// the sub-issues of each of the given issues, in one query: each issue is its own alias
+export function childrenQuery(numbers: readonly number[]): string {
+  const parts = numbers.map((n) => `i${n}:issue(number:${n}){subIssues(first:100){nodes{number title url state repository{nameWithOwner} subIssuesSummary{total completed}}}}`);
+  return `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){${parts.join(' ')}}}`;
+}
+
+type GqlChild = { number: number; title: string; url: string; state: string; repository: { nameWithOwner: string }; subIssuesSummary?: { total: number; completed: number } };
+export type ChildrenRead = { repository: Record<string, { subIssues: GqlConnection<GqlChild> } | null> };
+
+export function fromChildren(read: ChildrenRead): Record<number, Child[]> {
+  const out: Record<number, Child[]> = {};
+  for (const [alias, node] of Object.entries(read.repository)) {
+    if (!node) continue;
+    out[Number(alias.slice(1))] = node.subIssues.nodes.map((c) => ({
+      repo: c.repository.nameWithOwner,
+      number: c.number,
+      title: c.title,
+      url: c.url,
+      state: c.state === 'CLOSED' ? 'closed' : 'open',
+      ...summary(c.subIssuesSummary),
+    }));
+  }
+  return out;
+}
 
 export type RestRuns = { workflow_runs: RestRun[] };
 
