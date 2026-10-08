@@ -43,6 +43,14 @@ describe('ledger', () => {
     expect(l.data.work['o/r#1']!.history).toEqual([{ phase: 'working', at: T0 }, { phase: 'ci', at: T0 + 1000 }]);
   });
 
+  it('finishes work at the time it closed, once', () => {
+    const { l } = ledger();
+    l.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    l.claim({ session: 'A', repo: 'o/r', issue: 1 }, 'one');
+    expect(l.finish('o/r', 1, 'merged', T0 - 5000)?.finished).toEqual({ at: T0 - 5000, how: 'merged' });
+    expect(l.finish('o/r', 1, 'closed')).toBeUndefined();
+  });
+
   it('hands a letter out once', () => {
     const { l } = ledger();
     const letter = l.post({ session: 'A', text: 'hi', events: [], subs: [] });

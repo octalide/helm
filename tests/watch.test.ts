@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { route } from '../src/daemon/deliver.ts';
-import { globMatch, matches, retiredBy } from '../src/daemon/watch.ts';
+import { ended, globMatch, matches, retiredBy } from '../src/daemon/watch.ts';
+import { forge, issue, pull } from './fixtures.ts';
 import type { HelmEvent, Subscription } from '../src/core/types.ts';
 
 const ctx = { protectedBranches: new Set(['dev', 'main']) };
@@ -67,5 +68,16 @@ describe('route', () => {
     ]);
     expect(letters[1]?.text.split('\n')[0]).toBe('[helm o/r]');
     expect(retired).toEqual(['s2']);
+  });
+});
+
+describe('ended', () => {
+  it('retires a subscription with an end once the forge shows its pr or issue ended', () => {
+    const f = forge({ pulls: [pull(1, { state: 'merged' }), pull(2)], issues: [issue(5, { state: 'closed' })] });
+    expect(ended(sub({ scope: { kind: 'pr', number: 1 }, until: 'settled' }), f)).toBe(true);
+    expect(ended(sub({ scope: { kind: 'pr', number: 2 }, until: 'settled' }), f)).toBe(false);
+    expect(ended(sub({ scope: { kind: 'pr', number: 1 } }), f)).toBe(false);
+    expect(ended(sub({ scope: { kind: 'issue', number: 5 }, until: 'closed' }), f)).toBe(true);
+    expect(ended(sub({ scope: { kind: 'issue', number: 5 }, until: 'merged' }), f)).toBe(false);
   });
 });

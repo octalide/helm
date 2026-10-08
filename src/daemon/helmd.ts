@@ -17,7 +17,7 @@ import { emptyLedger, Ledger, type LedgerData } from './ledger.ts';
 import { discover, type Git, git as realGit, scan } from './local.ts';
 import { readJson, Saver, writeJson } from './persist.ts';
 import { emptyCache, type RepoCache, RepoPoller } from './poller.ts';
-import type { MatchContext } from './watch.ts';
+import { ended, expired, type MatchContext } from './watch.ts';
 
 export type DaemonDeps = {
   paths: HelmPaths;
@@ -223,7 +223,7 @@ export class Daemon {
     for (const s of gone) this.log(`session ${s.id} went quiet`);
     const now = this.now();
     for (const s of Object.values(this.ledger.data.subscriptions)) {
-      if (typeof s.until === 'object' && Date.parse(s.until.at) <= now) this.ledger.unsubscribe(s.id);
+      if (expired(s, now) || ended(s, s.repo ? this.pollers.get(s.repo)?.forge : undefined)) this.ledger.unsubscribe(s.id);
     }
     this.refreshViews();
   }
@@ -232,7 +232,8 @@ export class Daemon {
   private handle(repo: RepoName, events: HelmEvent[]): void {
     const forge = this.pollers.get(repo)?.forge;
     for (const e of events) {
-      if (e.kind === 'issue' && e.issue !== undefined && e.tags.includes('closed')) this.ledger.finish(repo, e.issue, 'closed');
+      // an issue closed by its merged pr finished as merged, whichever of the two events comes first
+      if (e.kind === 'issue' && e.issue !== undefined && e.tags.includes('closed')) this.ledger.finish(repo, e.issue, forge && pullFor(e.issue, forge.pulls)?.state === 'merged' ? 'merged' : 'closed');
       if (e.kind === 'pr' && e.pr !== undefined && e.tags.includes('merged')) {
         const pull = forge?.pulls.find((p) => p.number === e.pr);
         for (const w of Object.values(this.ledger.data.work)) {
@@ -323,6 +324,8 @@ export class Daemon {
       const key = workKey(v.repo, v.issue);
       next.set(key, v.phase);
       this.ledger.phase(v.repo, v.issue, v.phase);
+      // done by what the forge says, though no close or merge event reached helm: a poll that only seeded saw it
+      if (v.phase === 'done' && !v.finished) this.finishLate(v);
       const was = before.get(key);
       const stallKey = `stall:work:${key}`;
       if (v.phase === 'stalled') {
@@ -370,6 +373,13 @@ export class Daemon {
 
   private tree(work: readonly WorkView[]): TreeNode[] {
     return buildTree([...this.pollers.values()].flatMap((p) => (p.forge ? [p.forge] : [])), work);
+  }
+
+  private finishLate(v: WorkView): void {
+    const forge = this.pollers.get(v.repo)?.forge;
+    const pull = v.pull ? forge?.pulls.find((p) => p.number === v.pull!.number) : undefined;
+    const closed = pull?.state === 'merged' ? pull.closedAt : forge?.issues.find((i) => i.number === v.issue)?.closedAt;
+    this.ledger.finish(v.repo, v.issue, pull?.state === 'merged' ? 'merged' : 'closed', closed ? Date.parse(closed) : this.now());
   }
 
   workViews(): WorkView[] {
