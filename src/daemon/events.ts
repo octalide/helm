@@ -145,7 +145,7 @@ function commentEvent(repo: string, kind: 'issue' | 'pr', n: number, title: stri
   };
 }
 
-function verdictEvent(repo: string, p: Pull, verdict: 'success' | 'failure', now: number): HelmEvent {
+export function verdictEvent(repo: string, p: Pull, verdict: 'success' | 'failure', now: number): HelmEvent {
   const failed = p.checks.filter((c) => !isPassing(c.state));
   const counts = `${p.checks.length} check${p.checks.length === 1 ? '' : 's'}${failed.length ? `, failed: ${failed.map((c) => c.name).join(', ')}` : ''}`;
   return {

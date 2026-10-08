@@ -99,7 +99,7 @@ export function routes(d: Daemon, stop: () => void): Route[] {
       const b = (await body()) as SubscribeBody;
       need(b?.session && b.scope?.kind, 'session and scope are required');
       try {
-        return d.subscribe(b);
+        return await d.subscribe(b);
       } catch (e) {
         throw new HttpError(400, (e as Error).message);
       }
