@@ -3,7 +3,7 @@ import { hasWorker } from '../src/core/work.ts';
 import { phaseOf, viewOf } from '../src/daemon/derive.ts';
 import { isOpen } from '../src/core/decision.ts';
 import type { Decision } from '../src/core/types.ts';
-import { ClaimError, emptyLedger, Ledger, type LedgerData } from '../src/daemon/ledger.ts';
+import { ClaimError, emptyLedger, Ledger, LEDGER_VERSION, type LedgerData } from '../src/daemon/ledger.ts';
 import { check, forge, issue, pull, T0 } from './fixtures.ts';
 
 const ledger = () => {
@@ -21,6 +21,22 @@ describe('ledger', () => {
       ['A', 'work'],
       ['C', 'fleet'],
     ]);
+  });
+
+  it('keeps a known session\'s role and repository unless a role is asked, and tells a new one its role', () => {
+    const { l } = ledger();
+    const kinds = (id: string) => Object.values(l.data.subscriptions).filter((s) => s.session === id).map((s) => s.scope.kind);
+    expect(l.register({ id: 'A', cwd: '/', repo: 'o/r', protocol: 3 }).role).toBe('repo');
+    expect(l.register({ id: 'O', cwd: '/', protocol: 3 }).role).toBe('other');
+    l.setRole('A', 'coordinator');
+    // neither a mod that asks nothing nor an older one sending its guess overwrites the stored role
+    expect(l.register({ id: 'A', cwd: '/', repo: 'o/x', protocol: 3 })).toMatchObject({ role: 'coordinator', repo: 'o/r' });
+    expect(l.register({ id: 'A', cwd: '/', repo: 'o/r', role: 'repo' }).role).toBe('coordinator');
+    expect(kinds('A')).toEqual(['fleet']);
+    // a new id after a /clear goes on in the role of the one it went on from
+    expect(l.register({ id: 'A2', cwd: '/', repo: 'o/r', from: 'A', protocol: 3 }).role).toBe('coordinator');
+    expect(l.register({ id: 'A2', cwd: '/', role: 'repo', protocol: 3 }).role).toBe('repo');
+    expect(kinds('A2')).toEqual(['work']);
   });
 
   it('refuses a claim on work a live session owns, unless forced', () => {
@@ -159,10 +175,67 @@ describe('ledger', () => {
     expect(l.live('A')).toBe(false);
   });
 
+  it('gives back what a session adopted and has not acted on once it is not that repository\'s repo session', () => {
+    const { l, tick } = ledger();
+    l.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    l.queue({ session: 'A', repo: 'o/r', issues: [1, 2] }, () => undefined);
+    l.claim({ session: 'A', repo: 'o/r', issue: 3, agent: 'x' }, 'three');
+    const pr = l.subscribe({ session: 'A', agent: 'x', repo: 'o/r', scope: { kind: 'pr', number: 7 } });
+    const stall = l.decide({ kind: 'stall', repo: 'o/r', issue: 3, title: 's', body: '', blocking: false });
+    tick(200_000);
+    l.sweep(120_000);
+    l.register({ id: 'B', cwd: '/', repo: 'o/r' });
+    l.adopt('B');
+    tick(1000);
+    // B acts on #2: a dispatch makes it B's own
+    l.claim({ session: 'B', repo: 'o/r', issue: 2, agent: 'y' }, 'two');
+    expect(l.giveBack('B')).toBeUndefined();
+    l.setRole('B', 'coordinator');
+    const g = l.giveBack('B')!;
+    expect([g.to, g.work.map((w) => [w.issue, w.owner, w.adopted]), g.subscriptions, g.decisions.map((d) => [d.id, d.session])]).toEqual([
+      ['A'],
+      [
+        [1, 'A', undefined],
+        [3, 'A', undefined],
+      ],
+      [pr.id],
+      [[stall.id, 'A']],
+    ]);
+    expect([l.data.work['o/r#2']!.owner, l.data.subscriptions[pr.id]!.session, l.data.sessions.B!.adoptions]).toEqual(['B', 'A', undefined]);
+    expect(l.giveBack('B')).toBeUndefined();
+  });
+
   it('reads a version 1 ledger, leaving its decisions with the person', () => {
     const old = { ...emptyLedger(), version: 1, decisions: { d1: { id: 'd1', kind: 'question', title: 'q', body: '', blocking: true, state: 'open', createdAt: T0, updatedAt: T0 } } } as unknown as LedgerData;
     const l = new Ledger(old, () => T0);
-    expect([l.data.version, l.data.decisions.d1!.to]).toEqual([2, 'person']);
+    expect([l.data.version, l.data.decisions.d1!.to]).toEqual([LEDGER_VERSION, 'person']);
+  });
+
+  it('reads a version 2 ledger, making a coordinator its default role overwrote one again and recording what it adopted', () => {
+    const { l: v2, tick } = ledger();
+    v2.register({ id: 'C', cwd: '/', role: 'coordinator' });
+    v2.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    v2.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'x' }, 'one');
+    v2.subscribe({ session: 'A', repo: 'o/r', scope: { kind: 'pr', number: 7 } });
+    // the version 2 register: a role it was sent overwrote the stored one, and kept the old role's subscription
+    v2.data.sessions.C!.role = 'repo';
+    v2.data.sessions.C!.repo = 'o/r';
+    v2.subscribe({ session: 'C', scope: { kind: 'work' } });
+    v2.decide({ kind: 'stall', repo: 'o/r', issue: 1, title: 's', body: '', blocking: false });
+    tick(200_000);
+    v2.sweep(120_000);
+    v2.heartbeat('C', []);
+    const a = v2.adopt('C')!;
+    v2.record([{ id: 'e', kind: 'work', at: T0, tags: ['adopted'], text: '', owner: 'C', detail: [`decisions now addressed to this session: ${a.decisions[0]!.id} (stall #1)`, `subscriptions now this session's: ${a.subscriptions.join(' ')}`] }]);
+    const data = JSON.parse(JSON.stringify(v2.data)) as LedgerData;
+    for (const s of Object.values(data.sessions)) delete s.adoptions;
+    data.version = 2;
+    const l = new Ledger(data, () => T0 + 300_000);
+    const c = l.data.sessions.C!;
+    expect([c.role, Object.values(l.data.subscriptions).filter((s) => s.session === 'C' && !s.agent).map((s) => s.scope.kind)]).toEqual(['coordinator', ['fleet', 'pr']]);
+    expect(c.adoptions?.map((r) => [r.work.map((w) => w.key), r.subscriptions.map((s) => s.was), r.decisions.map((d) => d.was.session)])).toEqual([[['o/r#1'], ['A'], ['A']]]);
+    l.register({ id: 'C', cwd: '/', repo: 'o/r', role: 'repo' });
+    expect(l.giveBack('C')!.work.map((w) => [w.issue, w.owner])).toEqual([[1, 'A']]);
   });
 
   it('holds a dismissed condition until it changes or ends, then raises it again', () => {

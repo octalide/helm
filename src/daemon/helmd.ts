@@ -16,7 +16,7 @@ import { pullFor, viewOf } from './derive.ts';
 import { verdictEvent } from './events.ts';
 import { epicEvents, rootsOf } from './epics.ts';
 import type { GitHub } from './github.ts';
-import { type Adoption, emptyLedger, Ledger, type LedgerData } from './ledger.ts';
+import { type Adoption, emptyLedger, type GiveBack, Ledger, type LedgerData } from './ledger.ts';
 import { discover, type Git, git as realGit, scan } from './local.ts';
 import { readJson, Saver, writeJson } from './persist.ts';
 import { leftovers, type ProcTable, procfs, still } from './procs.ts';
@@ -555,6 +555,7 @@ export class Daemon {
     const s = this.ledger.register(b);
     if (s.repo) this.asked.set(s.repo, this.now());
     this.adopted(this.ledger.adopt(s.id, b.from));
+    this.gaveBack(this.ledger.giveBack(s.id));
     return s;
   }
 
@@ -585,6 +586,33 @@ export class Daemon {
       owner: a.session,
     };
     this.dispatch([event], { except: { session: a.session } });
+  }
+
+  // what a session gave back is told to it and the fleet, and what went back to a gone session goes on by succession,
+  // or to the person when no session is there to take it
+  private gaveBack(g: GiveBack | undefined): void {
+    if (!g) return;
+    const s = this.ledger.data.sessions[g.session];
+    const lines = giveBackLines(g);
+    this.log(`session ${g.session} gave back ${g.work.length} work items to ${g.to.join(', ')}`);
+    this.post({ session: g.session, text: letterText([{ head: 'gave back', lines }]), parts: [{ head: 'gave back', lines }], events: [], subs: [] });
+    const event: HelmEvent = {
+      id: `work:returned:${g.session}@${this.now()}`,
+      kind: 'work',
+      ...(s?.repo ? { repo: s.repo } : {}),
+      at: this.now(),
+      tags: ['returned'],
+      text: lines[0]!,
+      detail: lines.slice(1),
+      owner: g.session,
+    };
+    this.dispatch([event], { except: { session: g.session } });
+    for (const id of g.to) {
+      const o = this.ledger.data.sessions[id];
+      if (!o?.gone) continue;
+      this.succeed(o);
+      this.orphan(o.id);
+    }
   }
 
   heartbeat(id: string, agents: AgentRecord[]): Session | undefined {
@@ -640,7 +668,9 @@ export class Daemon {
 
   setRole(id: string, role: SessionRole, repo?: RepoName): Session | undefined {
     const s = this.ledger.setRole(id, role, repo);
-    if (s) this.adopted(this.ledger.adopt(s.id));
+    if (!s) return undefined;
+    this.gaveBack(this.ledger.giveBack(s.id));
+    this.adopted(this.ledger.adopt(s.id));
     return s;
   }
 
@@ -964,6 +994,16 @@ function adoptionLines(a: Adoption, views: ReadonlyMap<string, WorkView>): strin
     ...(queued.length ? [`the rest, in backlog order: ${queued.map((w) => workKey(w.repo, w.issue)).join(' ')}`] : []),
     ...(a.decisions.length ? [`decisions now addressed to this session: ${a.decisions.map((d) => `${d.id} (${d.kind}${d.issue !== undefined ? ` #${d.issue}` : ''})`).join(', ')}`] : []),
     ...(a.subscriptions.length ? [`subscriptions now this session's: ${a.subscriptions.join(' ')}`] : []),
+  ];
+}
+
+// what a session gave back, and to whom
+function giveBackLines(g: GiveBack): string[] {
+  return [
+    `this session is not the repository session its adoptions were for, so it gave back what it had not acted on to session${g.to.length === 1 ? '' : 's'} ${g.to.join(', ')}: ${g.work.length} item${g.work.length === 1 ? '' : 's'}`,
+    ...(g.work.length ? [`work: ${g.work.map((w) => workKey(w.repo, w.issue)).join(' ')}`] : []),
+    ...(g.decisions.length ? [`decisions: ${g.decisions.map((d) => d.id).join(', ')}`] : []),
+    ...(g.subscriptions.length ? [`subscriptions: ${g.subscriptions.join(' ')}`] : []),
   ];
 }
 

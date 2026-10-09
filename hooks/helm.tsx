@@ -113,10 +113,21 @@ async function agentRecords($: $): Promise<AgentRecord[]> {
   }));
 }
 
-// from: the session this process went on from, which helmd hands over to this one whole
+// from: the session this process went on from, which helmd hands over to this one whole. the role goes only when one
+// was asked for, and the role and repository are what helmd answers, which keeps a known session's own
 async function bind($: $, r: Runtime, from?: string): Promise<void> {
   r.session = await $.session.id();
-  await r.client.register({ id: r.session, cwd: await $.session.cwd(), role: r.role, ...(r.repo ? { repo: r.repo } : {}), ...(from && from !== r.session ? { from } : {}) });
+  const s = await r.client.register({
+    id: r.session,
+    cwd: await $.session.cwd(),
+    protocol: PROTOCOL,
+    ...(r.asked ? { role: r.asked } : {}),
+    ...(r.checkout ? { repo: r.checkout } : {}),
+    ...(from && from !== r.session ? { from } : {}),
+  });
+  r.role = s.role;
+  if (s.repo) r.repo = s.repo;
+  else delete r.repo;
 }
 
 // issue agent types registered by this load of the module, by name
@@ -297,14 +308,18 @@ export const register: Register = (on) => {
     const manifest = JSON.parse(await $.fs.read(`${$.plugin.root}/package.json`)) as { name: string; version: string };
     const install: Install = { root: $.plugin.root, name: manifest.name, version: manifest.version, protocol: PROTOCOL };
     const repo = await sessionRepo($);
-    const asked = (await $.env.get('HELM_ROLE')) as SessionRole | undefined;
+    const env = (await $.env.get('HELM_ROLE')) as SessionRole | undefined;
+    const asked = env && ROLES.includes(env) ? env : undefined;
     const r: Runtime = {
       client,
       version: install.version,
       install,
       home: (await $.env.get('HOME')) ?? '',
       session: await $.session.id(),
-      role: asked && ROLES.includes(asked) ? asked : repo ? 'repo' : 'other',
+      // until helmd answers
+      role: asked ?? 'other',
+      ...(asked ? { asked } : {}),
+      ...(repo ? { checkout: repo } : {}),
       instance: crypto.randomUUID(),
       alive: true,
       timers: [],
@@ -461,10 +476,11 @@ export const register: Register = (on) => {
         const role = rest[0] as SessionRole;
         if (!ROLES.includes(role)) return { text: 'usage: /helm role coordinator|repo|other [owner/name]' };
         const repo = rest[1] && isRepoName(rest[1]) ? rest[1] : r.repo;
-        r.role = role;
-        if (repo) r.repo = repo;
-        await r.client.role(r.session, role, repo);
-        return { text: `this session is now ${role}${repo && role === 'repo' ? ` for ${repo}` : ''}` };
+        const s = await r.client.role(r.session, role, repo);
+        r.asked = s.role;
+        r.role = s.role;
+        if (s.repo) r.repo = s.repo;
+        return { text: `this session is now ${s.role}${s.repo && s.role === 'repo' ? ` for ${s.repo}` : ''}` };
       }
       if (head === 'pane') {
         const opened = await $.ui.open({ id: PANE, title: 'helm', focus: true });
@@ -477,7 +493,8 @@ export const register: Register = (on) => {
         return { text: url };
       }
       if (head === 'restart') {
-        await $.process.run(daemonArgv((await daemonInstall($, r.install)).root, 'restart'), { timeoutMs: 30_000 });
+        const res = await $.process.run(daemonArgv((await daemonInstall($, r.install)).root, 'restart'), { timeoutMs: 30_000 });
+        if (res.exitCode !== 0) throw new Error(`helmd restart failed: ${(res.stderr || res.stdout).trim()}`);
         return { text: 'helmd restarted' };
       }
       return { text: await helpText(r) };

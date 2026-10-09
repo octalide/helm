@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0
+
+Sessions need `/reload-plugins`: the protocol moves to 3. A session on an older mod is told so and keeps using helmd.
+
+- A session's role is helmd's to keep. The mod sends a role only when one is asked for (`HELM_ROLE`, `/helm role`). A known session keeps its stored role, and a new one defaults by its checkout. A coordinator in a repository checkout no longer turns into that repository's session at register, and so no longer adopts its work (#84).
+- A session gives back what it adopted and has not acted on once it is no longer that repository's session, with the subscriptions and decisions that came with it. That goes on to a live repo session, or to the person. The ledger migration repairs the coordinator that adopted the mach backlog under 0.5.0 (#84).
+- `/helm restart` says when the restart failed, and why (#85).
+
 ## 0.5.0
 
 - A repo session takes over the unfinished work its repository's gone sessions left: backlog order, claims, subscriptions, and the decisions that were theirs or went to the person only because they were gone. It hears one `[helm adopted]` delivery listing what to dispatch again. After a `/clear` or an in-process resume the old session id is handed over exactly (#81).

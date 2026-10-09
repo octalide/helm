@@ -2,10 +2,10 @@ import type { ClaimBody, DecisionBody, QueueBody, RegisterBody, ReportBody, Subs
 import { isOpen } from '../core/decision.ts';
 import { workKey } from '../core/protocol.ts';
 import { inherited, selfWorked } from '../core/work.ts';
-import type { AgentRecord, Answer, Audience, Decision, HelmEvent, Leftover, Letter, Phase, RepoName, Session, SessionRole, Subscription, Work } from '../core/types.ts';
+import type { AdoptionRecord, AgentRecord, Answer, Audience, Decision, HelmEvent, Leftover, Letter, Phase, RepoName, Session, SessionRole, Subscription, Work } from '../core/types.ts';
 
 // bumped when the stored shape changes; an older file is migrated or refused, never read as this one
-export const LEDGER_VERSION = 2;
+export const LEDGER_VERSION = 3;
 
 export type LedgerData = {
   version: number;
@@ -26,7 +26,67 @@ export function migrate(data: LedgerData): LedgerData {
     for (const d of Object.values(data.decisions)) d.to ??= 'person';
     data.version = 2;
   }
+  if (data.version === 2) {
+    repairRoles(data);
+    recordAdoptions(data);
+    data.version = 3;
+  }
   return data;
+}
+
+const roleSub = (x: Subscription, kind: 'work' | 'fleet') => x.agent === undefined && x.scope.kind === kind;
+const subOrder = (id: string) => Number(id.slice(1));
+
+// version 2 let a register's default role overwrite the stored one. a coordinator overwritten so kept the fleet
+// subscription its own register made, older than the work subscription the overwrite added: it is a coordinator again
+function repairRoles(data: LedgerData): void {
+  const subs = Object.values(data.subscriptions);
+  for (const s of Object.values(data.sessions)) {
+    if (s.role !== 'repo') continue;
+    const fleet = subs.find((x) => x.session === s.id && roleSub(x, 'fleet'));
+    const work = subs.filter((x) => x.session === s.id && roleSub(x, 'work'));
+    if (!fleet || !work.length || work.some((x) => subOrder(x.id) < subOrder(fleet.id))) continue;
+    s.role = 'coordinator';
+    for (const x of work) delete data.subscriptions[x.id];
+  }
+}
+
+// version 2 recorded an adoption only on each work item it moved, and what else it moved only in its announcement. the
+// record each holder needs to give it back is rebuilt from both, as far as the event log still holds the announcement
+function recordAdoptions(data: LedgerData): void {
+  const listed = (session: string, head: string): string[] =>
+    data.events
+      .filter((e) => e.kind === 'work' && e.owner === session && e.tags.includes('adopted'))
+      .flatMap((e) => (e.detail ?? []).filter((l) => l.startsWith(head)).flatMap((l) => l.slice(head.length).split(/,? /)))
+      .map((x) => x.trim())
+      .filter((x) => /^[sd]\d+$/.test(x));
+  for (const s of Object.values(data.sessions)) {
+    const work = Object.values(data.work).filter((w) => w.owner === s.id && w.adopted !== undefined && current(w, w.adopted.agent, w.adopted.at));
+    if (!work.length || !s.repo) continue;
+    const from = work[0]!.adopted!.from;
+    const record: AdoptionRecord = {
+      at: Math.min(...work.map((w) => w.adopted!.at)),
+      repo: s.repo,
+      work: work.map((w) => ({ key: workKey(w.repo, w.issue), ...(w.agent ? { agent: w.agent } : {}), was: { owner: w.adopted!.from, order: w.order } })),
+      subscriptions: listed(s.id, "subscriptions now this session's: ")
+        .map((id) => data.subscriptions[id])
+        .filter((x): x is Subscription => x !== undefined && x.session === s.id)
+        .map((x) => ({ id: x.id, ...(x.agent ? { agent: x.agent } : {}), was: from })),
+      decisions: listed(s.id, 'decisions now addressed to this session: ')
+        .map((id) => data.decisions[id])
+        .filter((d): d is Decision => d !== undefined && isOpen(d) && d.to === 'session' && d.session === s.id)
+        .map((d) => {
+          const w = d.repo && d.issue !== undefined ? data.work[workKey(d.repo, d.issue)] : undefined;
+          return { id: d.id, was: { to: 'session' as const, session: w?.adopted?.from ?? from } };
+        }),
+    };
+    s.adoptions = [record];
+  }
+}
+
+// whether adopted work is still as its adoption left it: the same owner, the agent it came with, and no report since
+function current(w: Work, agent: string | undefined, at: number): boolean {
+  return !w.finished && w.agent === agent && !(w.report && w.report.at > at);
 }
 
 export const emptyLedger = (): LedgerData => ({
@@ -54,6 +114,9 @@ const SESSION_KEEP_MS = 7 * 24 * 3600_000;
 // subscriptions, and the open decisions now addressed to it
 export type Adoption = { session: string; from: string[]; work: Work[]; subscriptions: string[]; decisions: Decision[] };
 
+// what a session gave back of what it adopted and had not acted on, and the sessions it went back to
+export type GiveBack = { session: string; to: string[]; work: Work[]; subscriptions: string[]; decisions: Decision[] };
+
 export class ClaimError extends Error {
   owner: string;
   constructor(message: string, owner: string) {
@@ -77,10 +140,16 @@ export class Ledger {
     this.changed = changed;
   }
 
+  // a role asked for wins; otherwise a known session keeps its own, and a new one goes on with the role of the session
+  // it goes on from, or defaults by its checkout. a role from a mod before protocol 3 is its guess, a default only
   register(b: RegisterBody): Session {
     const now = this.now();
     const was = this.data.sessions[b.id];
-    const role: SessionRole = b.role ?? was?.role ?? (b.repo ? 'repo' : 'other');
+    const prev = !was && b.from !== undefined && b.from !== b.id ? this.data.sessions[b.from] : undefined;
+    const asked = (b.protocol ?? 0) >= 3 ? b.role : undefined;
+    const guess = (b.protocol ?? 0) >= 3 ? undefined : b.role;
+    const repo = was ? (was.repo ?? b.repo) : (prev?.repo ?? b.repo);
+    const role: SessionRole = asked ?? was?.role ?? prev?.role ?? guess ?? (repo ? 'repo' : 'other');
     const s: Session = {
       id: b.id,
       role,
@@ -88,11 +157,12 @@ export class Ledger {
       agents: was?.agents ?? [],
       startedAt: was?.startedAt ?? now,
       seenAt: now,
-      ...((b.repo ?? was?.repo) ? { repo: b.repo ?? was?.repo } : {}),
+      ...(repo ? { repo } : {}),
       ...((b.title ?? was?.title) ? { title: b.title ?? was?.title } : {}),
+      ...(was?.adoptions ? { adoptions: was.adoptions } : {}),
     };
     this.data.sessions[b.id] = s;
-    this.ensureRoleSubscription(s);
+    this.roleSubscription(s);
     this.changed();
     return s;
   }
@@ -113,10 +183,7 @@ export class Ledger {
     if (!s) return undefined;
     s.role = role;
     if (repo) s.repo = repo;
-    for (const sub of Object.values(this.data.subscriptions)) {
-      if (sub.session === id && sub.agent === undefined && (sub.scope.kind === 'work' || sub.scope.kind === 'fleet')) delete this.data.subscriptions[sub.id];
-    }
-    this.ensureRoleSubscription(s);
+    this.roleSubscription(s);
     this.changed();
     return s;
   }
@@ -128,12 +195,17 @@ export class Ledger {
     this.changed();
   }
 
-  // a repo session hears its own work and a coordinator the fleet, unasked: the subscription is listed and removable
-  private ensureRoleSubscription(s: Session): void {
+  // a repo session hears its own work and a coordinator the fleet, unasked: the subscription is listed and removable,
+  // and the other role's goes when the role changes
+  private roleSubscription(s: Session): void {
     const kind = s.role === 'coordinator' ? 'fleet' : s.role === 'repo' ? 'work' : undefined;
-    if (!kind) return;
-    const has = Object.values(this.data.subscriptions).some((x) => x.session === s.id && x.agent === undefined && x.scope.kind === kind);
-    if (!has) this.subscribe({ session: s.id, scope: { kind } });
+    let has = false;
+    for (const x of Object.values(this.data.subscriptions)) {
+      if (x.session !== s.id || x.agent !== undefined || (x.scope.kind !== 'work' && x.scope.kind !== 'fleet')) continue;
+      if (x.scope.kind === kind) has = true;
+      else delete this.data.subscriptions[x.id];
+    }
+    if (kind && !has) this.subscribe({ session: s.id, scope: { kind } });
   }
 
   // guess: a pr subscription's head when the caller named none
@@ -272,6 +344,11 @@ export class Ledger {
     if (named) {
       named.gone = true;
       gone = [named];
+      // what the ended session holds by succession it holds on as this one
+      if (named.adoptions?.length) {
+        s.adoptions = [...(s.adoptions ?? []), ...named.adoptions];
+        delete named.adoptions;
+      }
     } else {
       if (s.role !== 'repo' || !s.repo) return undefined;
       gone = Object.values(this.data.sessions).filter((x) => x.id !== id && x.role === 'repo' && x.repo === s.repo);
@@ -285,9 +362,11 @@ export class Ledger {
     let order = this.nextOrder(id);
     const taken = new Set<string>();
     const by = new Set<string>();
+    const record: AdoptionRecord = { at: now, repo: s.repo ?? '', work: [], subscriptions: [], decisions: [] };
     for (const w of work) {
       const was = w.owner!;
       by.add(was);
+      record.work.push({ key: workKey(w.repo, w.issue), ...(w.agent ? { agent: w.agent } : {}), was: { owner: was, order: w.order, ...(w.report ? { report: w.report } : {}), ...(w.adopted ? { adopted: w.adopted } : {}) } });
       // the gone session's own claim was that conversation's, not this one's
       if (selfWorked(w)) delete w.report;
       w.adopted = { from: was, at: now, ...(w.agent ? { agent: w.agent } : {}) };
@@ -302,6 +381,7 @@ export class Ledger {
       // the role's own subscription, which this session holds already
       if (sub.agent === undefined && (sub.scope.kind === 'work' || sub.scope.kind === 'fleet')) continue;
       by.add(sub.session);
+      record.subscriptions.push({ id: sub.id, ...(sub.agent ? { agent: sub.agent } : {}), was: sub.session });
       sub.session = id;
       subscriptions.push(sub.id);
     }
@@ -314,6 +394,7 @@ export class Ledger {
       const orphan = d.to === 'person' && (d.escalated === undefined || d.escalated.by === 'helm') && d.repo !== undefined && d.issue !== undefined && taken.has(workKey(d.repo, d.issue)) && this.audience(d).session === id;
       if (!addressed && !orphan) continue;
       if (addressed) by.add(d.session!);
+      record.decisions.push({ id: d.id, was: { to: d.to, ...(d.session ? { session: d.session } : {}), ...(d.escalated ? { escalated: d.escalated } : {}) } });
       d.to = 'session';
       d.session = id;
       delete d.escalated;
@@ -322,8 +403,73 @@ export class Ledger {
     }
     if (named) this.changed();
     if (!work.length && !subscriptions.length && !decisions.length) return undefined;
+    // a handover is the same session going on, and nothing in it is given back
+    if (!named) s.adoptions = [...(s.adoptions ?? []), record];
     this.changed();
     return { session: id, from: [...by], work, subscriptions, decisions };
+  }
+
+  // what a session adopted by succession is a repo session's of that repository: once this one is not that, it gives
+  // back what it has not acted on, to the sessions it came from. open decisions addressed to it about that work go
+  // with the work, as they go to the work's owner. what it has acted on is its own now, and its record is dropped
+  giveBack(id: string): GiveBack | undefined {
+    const s = this.data.sessions[id];
+    if (!s?.adoptions?.length) return undefined;
+    const keep = s.role === 'repo' ? s.adoptions.filter((a) => a.repo === s.repo) : [];
+    const back = s.adoptions.filter((a) => !keep.includes(a));
+    if (!back.length) return undefined;
+    if (keep.length) s.adoptions = keep;
+    else delete s.adoptions;
+    this.changed();
+    const now = this.now();
+    const out: GiveBack = { session: id, to: [], work: [], subscriptions: [], decisions: [] };
+    const to = new Set<string>();
+    const decided = new Set<string>();
+    // newest first, so work adopted twice over ends where the oldest adoption found it
+    for (const a of [...back].reverse()) {
+      for (const r of a.work) {
+        const w = this.data.work[r.key];
+        if (!w || w.owner !== id || !current(w, r.agent, a.at)) continue;
+        w.owner = r.was.owner;
+        w.order = r.was.order;
+        if (r.was.report) w.report = r.was.report;
+        if (r.was.adopted) w.adopted = r.was.adopted;
+        else delete w.adopted;
+        w.updatedAt = now;
+        if (r.was.owner) to.add(r.was.owner);
+        out.work.push(w);
+        for (const d of Object.values(this.data.decisions)) {
+          if (!isOpen(d) || d.to !== 'session' || d.session !== id || d.repo !== w.repo || d.issue !== w.issue || !r.was.owner) continue;
+          d.session = r.was.owner;
+          d.updatedAt = now;
+          decided.add(d.id);
+          out.decisions.push(d);
+        }
+      }
+      for (const r of a.subscriptions) {
+        const sub = this.data.subscriptions[r.id];
+        if (!sub || sub.session !== id || sub.agent !== r.agent) continue;
+        sub.session = r.was;
+        to.add(r.was);
+        out.subscriptions.push(sub.id);
+      }
+      for (const r of a.decisions) {
+        const d = this.data.decisions[r.id];
+        if (!d || decided.has(d.id) || !isOpen(d) || d.to !== 'session' || d.session !== id) continue;
+        d.to = r.was.to;
+        if (r.was.session) {
+          d.session = r.was.session;
+          to.add(r.was.session);
+        } else delete d.session;
+        if (r.was.escalated) d.escalated = r.was.escalated;
+        d.updatedAt = now;
+        decided.add(d.id);
+        out.decisions.push(d);
+      }
+    }
+    for (const d of out.decisions) if (d.session) to.add(d.session);
+    out.to = [...to];
+    return out.work.length || out.subscriptions.length || out.decisions.length ? out : undefined;
   }
 
   // a stopped agent running again: its owner picked it back up, so the stop no longer holds
