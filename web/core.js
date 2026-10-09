@@ -148,16 +148,18 @@ export const store = {
 };
 
 export const FILTERS = ['repo', 'session', 'epic', 'tier', 'q'];
+// what the page holds across views: the filters and the open drawer. every other parameter is one view's own
+const PAGE = new Set([...FILTERS, 'open']);
 
 export function filter(name) {
   return store.route.q.get(name) || '';
 }
 
 // a link to a view with the current filters, changed by over (a null value clears one). a view's own parameters,
-// such as the inbox's kind or the board's grouping, stay in that view: a link to another view carries only FILTERS
+// such as the inbox's kind or the board's grouping, stay in that view: a link to another view carries only PAGE
 export function href(view, arg = '', over = {}) {
   const q = new URLSearchParams(store.route.q);
-  if (view !== store.route.view) for (const k of [...q.keys()]) if (!FILTERS.includes(k)) q.delete(k);
+  if (view !== store.route.view) for (const k of [...q.keys()]) if (!PAGE.has(k)) q.delete(k);
   for (const [k, v] of Object.entries(over)) {
     if (v === null || v === '') q.delete(k);
     else q.set(k, v);
