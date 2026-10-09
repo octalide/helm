@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0
+
+- Issue agents can be resumed again. helm's guard against the model starting an issue agent directly moved from `agent.offer`, which the engine also asks on a resume, to `agent.spawn`. Before, every issue agent that ended its turn to wait on CI or an answer was unreachable. A session also registers the agent type of every work item it owns, so an agent on a tier since removed keeps its type (#45).
+- A new `parked` phase covers work set aside on purpose: labelled `blocked` or `parked`, or blocked by an open issue, with nobody on it. It raises no stall and needs no attention, and it is drawn in the pane and on the web page (#44).
+- A dismissed stall or CI failure stays dismissed until its condition changes (a new PR head, a different agent, a different PR state) or ends (#44).
+- A report polls its repository at once, so a phase no longer lags what the agent just did (#44).
+- On a resume, the routing judge sees the PR, its CI, the last report and the plan, and prices the work that is left (#43).
+- The default tiers are mechanical (haiku 5.5, high), light (sonnet 5.5, medium), standard (opus 5.5, medium), deep (opus 5.5, high) and frontier (fable 5.1, high), with frontier reserved for decision-heavy work. A `routing.fallback` that names no tier is refused. helmd applies an edited config.json live (#42).
+- Issue agents put their worktree inside the repository, under `.claude/worktrees/<branch>` unless the repository says otherwise (#46).
+
 ## 0.2.3
 
 - The web page's Activity view draws its events instead of `[object HTMLElement]`, and every view fills the page through one flattening helper (#39).
