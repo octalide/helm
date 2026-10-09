@@ -41,8 +41,10 @@ export function forge(over: Partial<ForgeState> = {}): ForgeState {
   return { repo: 'o/r', defaultBranch: 'dev', issues: [], pulls: [], runs: [], children: {}, polledAt: T0, ...over };
 }
 // a process table of pid -> [cwd, cmdline]; an absent cwd is a process not readable by this user
-export const table = (procs: Record<number, [string | undefined, string]>): ProcTable => ({
-  pids: async () => Object.keys(procs).map(Number),
-  cwd: async (pid) => procs[pid]?.[0],
-  command: async (pid) => procs[pid]?.[1],
+// live is the table itself, so a test can end a process
+export const table = (live: Record<number, [string | undefined, string]>): ProcTable & { live: typeof live } => ({
+  live,
+  pids: async () => Object.keys(live).map(Number),
+  cwd: async (pid) => live[pid]?.[0],
+  command: async (pid) => live[pid]?.[1],
 });

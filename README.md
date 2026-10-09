@@ -91,7 +91,7 @@ GitHub's sub-issues draw the tree. Every open issue with sub-issues that no othe
 
 Each work item keeps when it entered each phase, and finished work stays 30 days, so the page can draw a timeline. A coordinator hears an epic as one `[helm epic]` delivery whenever anything under it moves, carrying its rollup and every phase change under it in that batch, instead of a delivery per child. Work that needs someone still arrives at once.
 
-When an issue agent's loop ends, helmd looks for live processes whose working directory is inside that work's worktree (Linux `/proc`, and a host without it reports nothing). What it finds goes on the work item as `leftovers` and to the owner as a `[helm work]` delivery tagged `leftovers`, shown in the pane and the drawer. helm never kills them: whoever owns the work decides.
+When an issue agent's loop ends, helmd looks for live processes whose working directory is inside that work's worktree (Linux `/proc`, and a host without it reports nothing). What it finds goes on the work item as `leftovers` and to the owner as a `[helm work]` delivery tagged `leftovers`, shown in the pane and the drawer. Each local scan drops a listed process that has exited or left the worktree. helm never kills them: whoever owns the work decides.
 
 ## Routing
 

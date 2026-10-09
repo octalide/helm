@@ -115,6 +115,11 @@ describe('daemon', () => {
     d.heartbeat('A', [{ ...agent, status: 'completed' }]);
     await vi.waitFor(() => expect(d.ledger.data.work['o/r#7']?.leftovers).toEqual([{ pid: 40, command: 'sh -c until false; do :; done' }]));
     expect(lettersFor(d, 'A').some((l) => l.text.includes('agent x ended and left 1 process running') && l.text.includes('pid 40'))).toBe(true);
+    await d.recheckLeftovers();
+    expect(d.ledger.data.work['o/r#7']?.leftovers).toHaveLength(1);
+    delete procs.live[40];
+    await d.recheckLeftovers();
+    expect(d.ledger.data.work['o/r#7']?.leftovers).toBeUndefined();
     await d.stop();
   });
 });

@@ -37,3 +37,15 @@ export async function leftovers(dir: string, table: ProcTable = procfs(), self =
   }
   return out.sort((a, b) => a.pid - b.pid);
 }
+
+// the listed processes still running as listed: the same pid on the same command, its cwd still inside the directory
+// when there is one to hold it to
+export async function still(listed: readonly Leftover[], dir: string | undefined, table: ProcTable = procfs()): Promise<Leftover[]> {
+  const out: Leftover[] = [];
+  for (const p of listed) {
+    const cwd = await table.cwd(p.pid);
+    if (cwd === undefined || (dir !== undefined && !inside(dir, cwd))) continue;
+    if ((await table.command(p.pid)) === p.command) out.push(p);
+  }
+  return out;
+}

@@ -17,7 +17,7 @@ import type { GitHub } from './github.ts';
 import { emptyLedger, Ledger, type LedgerData } from './ledger.ts';
 import { discover, type Git, git as realGit, scan } from './local.ts';
 import { readJson, Saver, writeJson } from './persist.ts';
-import { leftovers, type ProcTable, procfs } from './procs.ts';
+import { leftovers, type ProcTable, procfs, still } from './procs.ts';
 import { emptyCache, type RepoCache, RepoPoller } from './poller.ts';
 import { ended, expired, type MatchContext } from './watch.ts';
 
@@ -286,6 +286,7 @@ export class Daemon {
         if (!was || JSON.stringify({ ...was, scannedAt: 0 }) !== JSON.stringify({ ...next, scannedAt: 0 })) moved = true;
         this.local.set(repo, next);
       }
+      await this.recheckLeftovers();
       if (moved) this.changed();
     } catch (error) {
       this.log(`local scan failed: ${(error as Error).message}`);
@@ -544,6 +545,14 @@ export class Daemon {
     }
     for (const [agent, was] of before) if (LOOPING.has(was) && !agents.some((a) => a.id === agent)) void this.agentEnded(id, agent);
     return s;
+  }
+
+  // a leftover that has exited, or moved out of the worktree, is no longer reported
+  async recheckLeftovers(): Promise<void> {
+    for (const v of this.workViews()) {
+      if (!v.leftovers?.length) continue;
+      this.ledger.leftovers(v.repo, v.issue, await still(v.leftovers, v.worktree?.path, this.procs));
+    }
   }
 
   // what an ended agent left running in its work's worktree goes on the work item, and to its owner when there is any
