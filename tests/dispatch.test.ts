@@ -17,6 +17,7 @@ function env(issues: Record<number, { state: string; pr?: boolean }>) {
       const i = issues[Number(m[1])]!;
       return json({ repo: 'o/r', number: Number(m[1]), title: `t${m[1]}`, state: i.state, url: 'u', pr: i.pr ?? false, author: 'a', labels: [], body: 'b', comments: [] });
     }
+    if (path === '/v1/fleet') return json({ work: [] });
     if (path === '/v1/work/claim') return json({});
     if (path === '/v1/decisions') return json({ id: 'd1' });
     return json({ error: 'nope' }, 404);
@@ -36,12 +37,12 @@ describe('dispatch', () => {
       spawn: async (a) => (spawned.push(a), { agentId: 'A1' }),
     };
     const out = await dispatchIssues(e, port, { issues: [5] });
-    expect(out).toBe('o/r#5 → mechanical claude-sonnet-5-5/low, agent A1: a version bump');
-    expect(spawned).toEqual([{ subagentType: 'helm:issue-claude-sonnet-5-5-low', description: '#5 t5', prompt: 'Issue o/r#5: t5\nu' }]);
+    expect(out).toBe('o/r#5 → mechanical claude-haiku-5-5/high, agent A1: a version bump');
+    expect(spawned).toEqual([{ subagentType: 'helm:issue-claude-haiku-5-5-high', description: '#5 t5', prompt: 'Issue o/r#5: t5\nu' }]);
     const claims = calls.filter((c) => c.path === '/v1/work/claim').map((c) => c.body as { agent?: string });
     expect(claims.map((c) => c.agent)).toEqual([undefined, 'A1']);
     const decision = calls.find((c) => c.path === '/v1/decisions')?.body as { title: string; blocking: boolean };
-    expect(decision.title).toBe('#5 routed to mechanical (claude-sonnet-5-5/low), low confidence');
+    expect(decision.title).toBe('#5 routed to mechanical (claude-haiku-5-5/high), low confidence');
     expect(decision.blocking).toBe(false);
   });
 

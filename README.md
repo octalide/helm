@@ -83,26 +83,29 @@ CI arrives as one verdict per PR head (`ci settled success` or `failure`, naming
 
 ## Phases
 
-Work moves through `queued → working → draft → ci → ready → done`, with `failing`, `blocked` and `stalled` beside them. Phases are derived, not set: from the agent's reports, whether its agent is alive, the PR that closes the issue or sits on its branch, and that PR's checks. A stalled item (no live agent, work not done) and a stalled or failing CI raise a decision on their own, and clear it once the condition passes.
+Work moves through `queued → working → draft → ci → ready → done`, with `failing`, `blocked`, `stalled` and `parked` beside them. Phases are derived, not set: from the agent's reports, whether its agent is alive, the PR that closes the issue or sits on its branch, that PR's checks, and the issue's labels and dependencies. A stalled item (no live agent, work not done) and a stalled or failing CI raise a decision on their own, and clear it once the condition passes. A dismissed one stays dismissed until its condition changes (a new PR head, a different agent, a different phase) or ends. Work set aside on purpose, labelled `blocked` or `parked` or blocked by an open issue, is `parked` while nobody is on it: it raises nothing and needs no attention. A report polls its repository at once, so the phase keeps up with what the agent just did.
 
 ## Hierarchy
 
-GitHub's sub-issues draw the tree. Every open issue with sub-issues that no other issue in a watched repository holds is a root epic, and each node joins its work item: phase, agent, tier and plan progress. Sub-issues in other repositories nest under their parent, and a sub-epic in a repository helm does not poll is counted from its summary. Each epic rolls up its leaves: done, active, in CI, ready, needing attention, queued and unowned. Sub-issues are read again only when their parent moved, or every 10 minutes.
+GitHub's sub-issues draw the tree. Every open issue with sub-issues that no other issue in a watched repository holds is a root epic, and each node joins its work item: phase, agent, tier and plan progress. Sub-issues in other repositories nest under their parent, and a sub-epic in a repository helm does not poll is counted from its summary. Each epic rolls up its leaves: done, active, in CI, ready, needing attention, queued, parked and unowned. Sub-issues are read again only when their parent moved, or every 10 minutes.
 
 Each work item keeps when it entered each phase, and finished work stays 30 days, so the page can draw a timeline. A coordinator hears an epic as one `[helm epic]` delivery whenever anything under it moves, carrying its rollup and every phase change under it in that batch, instead of a delivery per child. Work that needs someone still arrives at once.
 
 ## Routing
 
-`dispatch` sends each issue to a **tier**: a model and an effort with a description of the work that belongs there. The judge (`claude-haiku-5-5` by default) reads the issue against the tiers and answers a tier, a confidence and a reason. Each pick is logged as a decision for review, and answering it with another tier reroutes the issue. Name a tier in `dispatch` to skip the judge.
+`dispatch` sends each issue to a **tier**: a model and an effort with a description of the work that belongs there. The judge (`claude-haiku-5-5` by default) reads the issue against the tiers and answers a tier, a confidence and a reason. Each pick is logged as a decision for review, and answering it with another tier reroutes the issue. Name a tier in `dispatch` to skip the judge. A session registers an agent type for every tier and for the model and effort of every work item it owns, so an agent dispatched on a tier since removed can still be resumed. A session picks up a changed tier table on `/reload-plugins`.
 
 The default tiers:
 
 | tier | model | effort | for |
 |---|---|---|---|
-| mechanical | claude-sonnet-5-5 | low | version bumps, pattern-following additions, renames, docs, one-file fixes with a stated cause |
+| mechanical | claude-haiku-5-5 | high | version and pin bumps, renames, moves, docs, pattern-following data rows, finishing a done PR, one-file fixes with a stated cause |
+| light | claude-sonnet-5-5 | medium | small contained work in one module with a stated design |
 | standard | claude-opus-5-5 | medium | ordinary work in one subsystem with clear acceptance |
-| deep | claude-opus-5-5 | high | cross-subsystem or contract changes, codegen, concurrency, unknown root causes |
-| frontier | claude-fable-5-1 | high | design-heavy or research-grade work, or what earlier attempts failed on |
+| deep | claude-opus-5-5 | high | cross-subsystem or contract changes, codegen, concurrency, soundness, design-heavy work, unknown root causes |
+| frontier | claude-fable-5-1 | high | reserved for decision-heavy work: architecture, contract or language design, research-grade problems, what earlier tiers failed on. Never an implementation workhorse |
+
+A judge answer that names no tier falls back to `routing.fallback`, `standard` by default.
 
 ## Web page
 
@@ -111,7 +114,7 @@ The default tiers:
 | view | shows |
 |---|---|
 | Overview | active work as the headline, tiles for what waits on you, what needs attention, what is in CI, ready and done this week; the attention queue, runs in flight, every epic's progress, the pipeline by phase, throughput per day and each session |
-| Board | work as cards in phase columns (queued, working, draft, in ci, ready, attention, done), each with its agent, tier, plan progress and checks; lanes by session, epic, repository or tier |
+| Board | work as cards in phase columns (queued, working, draft, in ci, ready, attention, parked, done), each with its agent, tier, plan progress and checks; lanes by session, epic, repository or tier |
 | Epics | the sub-issue tree across repositories, each epic with its rollup bar, each leaf with its phase, plan and agent; drill into any epic |
 | Timeline | a lane per work item of the phases it went through over 6 hours to 30 days, and the median time work spends in each phase |
 | CI | runs in flight with every job and step, pass rate and run length, each workflow's recent outcomes, and failed runs with their logs |
@@ -139,7 +142,9 @@ The page is served on 127.0.0.1 only. A request must name this server as its Hos
 }
 ```
 
-`roots` are searched for checkouts by their `origin` remote. `repos` are polled whether or not anything references them. `routing.tiers` replaces the table whole. A repository can set its own `routing` in `.helm/config.json`.
+`roots` are searched for checkouts by their `origin` remote. `repos` are polled whether or not anything references them. `routing.tiers` replaces the table whole, and `routing.fallback` must name one of its tiers. A repository can set its own `routing` in `.helm/config.json`.
+
+helmd watches the file and applies an edit live, with no restart. An edit that fails to parse or check is logged to the daemon log and the running config kept.
 
 State lives under `$XDG_STATE_HOME/helm` and the socket under `$XDG_RUNTIME_DIR/helm`. `HELM_HOME` puts everything under one directory, which is how a second daemon runs beside the real one.
 

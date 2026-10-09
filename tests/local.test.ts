@@ -26,10 +26,11 @@ describe('local git parsing', () => {
 });
 
 describe('config and logs', () => {
-  it('merges layers and refuses a malformed tier', () => {
+  it('merges layers and refuses a malformed tier or a fallback that names no tier', () => {
     const c = mergeConfig(DEFAULT_CONFIG, { poll: { active: 5 } });
     expect(c.poll).toEqual({ ...DEFAULT_CONFIG.poll, active: 5 });
     expect(() => mergeConfig(DEFAULT_CONFIG, { routing: { tiers: [{ name: 'x' }] } })).toThrow(/needs name/);
+    expect(() => mergeConfig(DEFAULT_CONFIG, { routing: { fallback: 'huge' } })).toThrow('routing.fallback "huge" names no tier; the tiers are mechanical, light, standard, deep, frontier');
   });
 
   it('keeps error lines with their lead-up', () => {

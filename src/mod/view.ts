@@ -31,13 +31,14 @@ const PHASE_COLOR: Record<Phase, string> = {
   ready: 'suggestion',
   blocked: 'error',
   stalled: 'warning',
+  parked: 'planMode',
   done: 'success',
 };
 
-const PHASE_GLYPH: Record<Phase, string> = { queued: '○', working: '●', draft: '◐', ci: '◔', ready: '◆', failing: '✗', blocked: '■', stalled: '◌', done: '✓' };
+const PHASE_GLYPH: Record<Phase, string> = { queued: '○', working: '●', draft: '◐', ci: '◔', ready: '◆', failing: '✗', blocked: '■', stalled: '◌', parked: '‖', done: '✓' };
 
 // the order work is listed in: what needs someone first, then what moves, then what waits
-const PHASE_RANK: Record<Phase, number> = { blocked: 0, failing: 1, stalled: 2, ready: 3, ci: 4, draft: 5, working: 6, queued: 7, done: 8 };
+const PHASE_RANK: Record<Phase, number> = { blocked: 0, failing: 1, stalled: 2, ready: 3, ci: 4, draft: 5, working: 6, queued: 7, parked: 8, done: 9 };
 const byRank = (a: WorkView, b: WorkView) => PHASE_RANK[a.phase] - PHASE_RANK[b.phase] || a.order - b.order;
 
 const short = (model: string) => model.replace(/^claude-/, '').replace(/-(\d+)-(\d+)$/, ' $1.$2');
@@ -47,8 +48,9 @@ const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n
 export function counts(work: readonly WorkView[], decisions: readonly Decision[]) {
   const open = work.filter((w) => w.phase !== 'done');
   return {
-    active: open.filter((w) => w.phase !== 'queued').length,
+    active: open.filter((w) => w.phase !== 'queued' && w.phase !== 'parked').length,
     queued: open.filter((w) => w.phase === 'queued').length,
+    parked: open.filter((w) => w.phase === 'parked').length,
     ci: open.filter((w) => w.phase === 'ci').length,
     attention: open.filter((w) => w.phase === 'blocked' || w.phase === 'failing' || w.phase === 'stalled').length,
     waiting: decisions.filter((d) => d.state === 'open' && d.blocking).length,
@@ -59,6 +61,7 @@ export function counts(work: readonly WorkView[], decisions: readonly Decision[]
 function summary(c: ReturnType<typeof counts>): Row {
   const row: Row = [{ text: `${c.active} active`, bold: true }];
   if (c.queued) row.push({ text: ` · ${c.queued} queued`, dim: true });
+  if (c.parked) row.push({ text: ` · ${c.parked} parked`, dim: true });
   if (c.ci) row.push({ text: ` · ${c.ci} in ci`, color: 'warning' });
   if (c.attention) row.push({ text: ` · ${c.attention} need attention`, color: 'error' });
   if (c.waiting) row.push({ text: ` · ${c.waiting} waiting on a decision`, color: 'error', bold: true });
@@ -110,6 +113,7 @@ export function rollupParts(r: Rollup): { n: number; color: string }[] {
     { n: Math.max(0, r.active - r.ci - r.ready), color: 'claude' },
     { n: r.attention, color: 'error' },
     { n: r.queued, color: 'inactive' },
+    { n: r.parked, color: PHASE_COLOR.parked },
   ];
 }
 
@@ -182,7 +186,7 @@ function workTab(f: Fleet, self: Self, o: PaneOpts): Row[] {
   const rows: Row[] = [summary(counts(s.work, s.decisions))];
   const width = clamp(o.cols - 4, 12, 48);
   if (s.work.length) {
-    const phases: Phase[] = ['ready', 'ci', 'working', 'draft', 'failing', 'blocked', 'stalled', 'queued'];
+    const phases: Phase[] = ['ready', 'ci', 'working', 'draft', 'failing', 'blocked', 'stalled', 'queued', 'parked'];
     rows.push(bar(phases.map((p) => ({ n: s.work.filter((w) => w.phase === p).length, color: PHASE_COLOR[p] })), s.work.length, width));
   }
   const fmt = { cols: o.cols, fleet: s.fleet, now: f.at };
@@ -208,7 +212,7 @@ function workTab(f: Fleet, self: Self, o: PaneOpts): Row[] {
 
 // the subtree's leaves that someone is on, what moves under an epic
 function moving(n: TreeNode): TreeNode[] {
-  if (!n.children.length) return n.phase && n.phase !== 'done' ? [n] : [];
+  if (!n.children.length) return n.phase && n.phase !== 'done' && n.phase !== 'parked' ? [n] : [];
   return n.children.flatMap(moving);
 }
 
@@ -225,7 +229,7 @@ function epicsTab(f: Fleet, self: Self, o: PaneOpts): Row[] {
     if (rows.length) rows.push([]);
     rows.push([{ text: `${String(percent(r)).padStart(3)}% `, bold: true }, { text: `${repoShort(t.repo)}#${t.number} `, dim: true }, { text: t.title.replace(/^epic:\s*/i, ''), bold: true }]);
     rows.push([{ text: '     ' }, ...bar(rollupParts(r), r.total, width), { text: ` ${r.done}/${r.total}`, dim: true }]);
-    const notes = [r.active ? `${r.active} active` : '', r.ci ? `${r.ci} in ci` : '', r.ready ? `${r.ready} ready` : '', r.queued ? `${r.queued} queued` : '', r.unowned ? `${r.unowned} unowned` : ''].filter(Boolean);
+    const notes = [r.active ? `${r.active} active` : '', r.ci ? `${r.ci} in ci` : '', r.ready ? `${r.ready} ready` : '', r.queued ? `${r.queued} queued` : '', r.parked ? `${r.parked} parked` : '', r.unowned ? `${r.unowned} unowned` : ''].filter(Boolean);
     if (r.attention) rows.push([{ text: '     ' }, { text: `${r.attention} need attention`, color: 'error' }, ...(notes.length ? [{ text: ` · ${notes.join(' · ')}`, dim: true }] : [])]);
     else if (notes.length) rows.push([{ text: '     ' }, { text: notes.join(' · '), dim: true }]);
     for (const n of moving(t).sort((a, b) => PHASE_RANK[a.phase!] - PHASE_RANK[b.phase!]).slice(0, 4)) {

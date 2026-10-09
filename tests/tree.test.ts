@@ -14,11 +14,11 @@ describe('tree', () => {
       issues: [issue(1, { subIssues: { total: 4, done: 1 } }), issue(2, { parent: { repo: 'o/r', number: 1 } }), issue(3, { parent: { repo: 'o/r', number: 1 } }), issue(4, { parent: { repo: 'o/r', number: 1 } })],
       children: { 1: [child('o/r', 2), child('o/r', 3), child('o/r', 4), child('o/r', 5, { state: 'closed' })] },
     });
-    const [root, ...rest] = buildTree([f], [work('o/r', 2, 'ci', { plan: [{ text: 'a', done: true }, { text: 'b', done: false }] }), work('o/r', 3, 'blocked')]);
+    const [root, ...rest] = buildTree([f], [work('o/r', 2, 'ci', { plan: [{ text: 'a', done: true }, { text: 'b', done: false }] }), work('o/r', 3, 'blocked'), work('o/r', 4, 'parked')]);
     expect(rest).toEqual([]);
-    expect(root!.rollup).toEqual({ total: 4, done: 1, active: 1, attention: 1, ci: 1, ready: 0, queued: 0, unowned: 1 });
+    expect(root!.rollup).toEqual({ total: 4, done: 1, active: 1, attention: 1, ci: 1, ready: 0, queued: 0, parked: 1, unowned: 0 });
     expect(percent(root!.rollup)).toBe(25);
-    expect(root!.children.map((c) => c.phase)).toEqual(['ci', 'blocked', undefined, 'done']);
+    expect(root!.children.map((c) => c.phase)).toEqual(['ci', 'blocked', 'parked', 'done']);
     expect(root!.children[0]!.plan).toEqual({ done: 1, total: 2 });
   });
 

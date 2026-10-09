@@ -1,7 +1,8 @@
+import { type FSWatcher, watch } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isDone, verdictOf } from '../core/checks.ts';
-import { type Config, mergeConfig, repoLayer } from '../core/config.ts';
+import { type Config, DEFAULT_CONFIG, mergeConfig, repoLayer } from '../core/config.ts';
 import type { AnswerBody, Answered, ClaimBody, ConfigView, DecisionBody, IssueDetail, QueueBody, RegisterBody, ReportBody, StreamFrame, SubscribeBody } from '../core/protocol.ts';
 import { workKey } from '../core/protocol.ts';
 import type { HelmPaths } from '../core/paths.ts';
@@ -29,9 +30,23 @@ export type DaemonDeps = {
   git?: Git;
   // off in tests, which drive polls by hand
   loops?: boolean;
+  // told of every config applied after start, for what lives outside the daemon such as the web listener
+  onConfig?: (next: Config, prev: Config) => void;
 };
 
-type Poll = PollStatus & { due: number; running: boolean };
+// the machine's config: the defaults under ~/.config/helm/config.json
+export async function readConfig(paths: HelmPaths): Promise<Config> {
+  const file = join(paths.config, 'config.json');
+  const raw = await readJson(file);
+  try {
+    return mergeConfig(DEFAULT_CONFIG, raw);
+  } catch (error) {
+    throw new Error(`${file}: ${(error as Error).message}`);
+  }
+}
+
+// again: asked for while it ran, so it runs once more as soon as it finishes
+type Poll = PollStatus & { due: number; running: boolean; again?: boolean };
 
 // how many repositories poll at once
 const POLL_CONCURRENCY = 3;
@@ -61,6 +76,7 @@ export class Daemon {
   private readonly log: (line: string) => void;
   private readonly git: Git;
   private readonly loops: boolean;
+  private readonly onConfig: (next: Config, prev: Config) => void;
   private readonly pollers = new Map<RepoName, RepoPoller>();
   private readonly savers = new Map<RepoName, Saver>();
   private readonly local = new Map<RepoName, LocalState>();
@@ -78,6 +94,9 @@ export class Daemon {
   private notifyTimer?: ReturnType<typeof setTimeout>;
   private refreshTimer?: ReturnType<typeof setTimeout>;
   private scanning = false;
+  private localTimer?: ReturnType<typeof setInterval>;
+  private configWatcher?: FSWatcher;
+  private configTimer?: ReturnType<typeof setTimeout>;
 
   constructor(deps: DaemonDeps) {
     this.paths = deps.paths;
@@ -88,6 +107,7 @@ export class Daemon {
     this.log = deps.log ?? (() => {});
     this.git = deps.git ?? realGit;
     this.loops = deps.loops ?? true;
+    this.onConfig = deps.onConfig ?? (() => {});
     this.startedAt = this.now();
     this.ledger = new Ledger(emptyLedger(), this.now);
   }
@@ -100,17 +120,59 @@ export class Daemon {
     this.refreshViews();
     if (!this.loops) return;
     this.timers.push(setInterval(() => void this.schedule(), 1000));
-    this.timers.push(setInterval(() => void this.scanLocal(), this.config.poll.local * 1000));
+    this.armLocal();
     this.timers.push(setInterval(() => this.sweep(), 15_000));
     void this.scanLocal();
+    await this.watchConfig();
   }
 
   async stop(): Promise<void> {
     for (const t of this.timers) clearInterval(t);
+    clearInterval(this.localTimer);
+    clearTimeout(this.configTimer);
+    this.configWatcher?.close();
     clearTimeout(this.notifyTimer);
     clearTimeout(this.refreshTimer);
     await this.ledgerSaver?.flush();
     await Promise.all([...this.savers.values()].map((s) => s.flush()));
+  }
+
+  private armLocal(): void {
+    clearInterval(this.localTimer);
+    if (this.loops) this.localTimer = setInterval(() => void this.scanLocal(), this.config.poll.local * 1000);
+  }
+
+  // the directory, not the file: an editor that saves by renaming over the file would leave a file watch on the old one
+  private async watchConfig(): Promise<void> {
+    await mkdir(this.paths.config, { recursive: true });
+    this.configWatcher = watch(this.paths.config, (_, name) => {
+      if (name && name !== 'config.json') return;
+      clearTimeout(this.configTimer);
+      this.configTimer = setTimeout(() => void this.reloadConfig(), 200);
+    });
+    this.configWatcher.on('error', (e) => this.log(`config watch failed: ${e.message}`));
+  }
+
+  // the config file read again and applied; one that fails to parse or check is logged and the running config kept
+  async reloadConfig(): Promise<void> {
+    let next: Config;
+    try {
+      next = await readConfig(this.paths);
+    } catch (error) {
+      this.log(`config not applied, keeping the running one: ${(error as Error).message}`);
+      return;
+    }
+    const prev = this.config;
+    if (JSON.stringify(next) === JSON.stringify(prev)) return;
+    this.config = next;
+    if (next.poll.local !== prev.poll.local) this.armLocal();
+    if (JSON.stringify(next.roots) !== JSON.stringify(prev.roots)) {
+      this.discoveredAt = 0;
+      if (this.loops) void this.scanLocal();
+    }
+    this.onConfig(next, prev);
+    this.log('config applied');
+    this.changed();
   }
 
   // every repository polled now: the configured ones, those a live session works in, those with unfinished work or a
@@ -169,7 +231,10 @@ export class Daemon {
   async pollRepo(repo: RepoName, force = false): Promise<void> {
     const st = this.polls.get(repo) ?? { active: false, interval: 0, failures: 0, due: 0, running: false };
     this.polls.set(repo, st);
-    if (st.running) return;
+    if (st.running) {
+      st.again = true;
+      return;
+    }
     st.running = true;
     try {
       const p = await this.poller(repo);
@@ -191,6 +256,10 @@ export class Daemon {
       const base = st.active ? this.config.poll.active : this.config.poll.idle;
       st.interval = st.failures ? Math.min(this.config.poll.idle * 4, base * 2 ** st.failures) : base;
       st.due = this.now() + st.interval * 1000;
+    }
+    if (st.again) {
+      delete st.again;
+      await this.pollRepo(repo, force);
     }
   }
 
@@ -245,7 +314,7 @@ export class Daemon {
       }
       if (e.kind === 'ci' && e.pr !== undefined) {
         if (e.tags.includes('stalled')) {
-          const raised = this.ledger.raise(`stall:ci:${repo}#${e.pr}`, { kind: 'stall', repo, title: `CI stalled on pr #${e.pr}`, body: [e.text, ...(e.detail ?? []), e.url ?? ''].join('\n'), blocking: false, ...this.prIssue(repo, e.pr) });
+          const raised = this.ledger.raise(`stall:ci:${repo}#${e.pr}`, `head ${e.sha ?? ''}`, { kind: 'stall', repo, title: `CI stalled on pr #${e.pr}`, body: [e.text, ...(e.detail ?? []), e.url ?? ''].join('\n'), blocking: false, ...this.prIssue(repo, e.pr) });
           if (raised) this.announce(raised);
         }
         if (e.tags.includes('settled')) this.ledger.resolveKey(`stall:ci:${repo}#${e.pr}`);
@@ -254,7 +323,7 @@ export class Daemon {
         const run = forge?.runs.find((r) => r.id === e.run);
         const key = `failure:${repo}:${run?.workflow ?? ''}:${e.branch}`;
         if (e.tags.includes('failure')) {
-          const raised = this.ledger.raise(key, { kind: 'failure', repo, title: `${run?.workflow ?? 'CI'} failing on ${e.branch}`, body: [e.text, e.url ?? ''].join('\n'), blocking: false });
+          const raised = this.ledger.raise(key, `run ${e.run}`, { kind: 'failure', repo, title: `${run?.workflow ?? 'CI'} failing on ${e.branch}`, body: [e.text, e.url ?? ''].join('\n'), blocking: false });
           if (raised) this.announce(raised);
         }
         if (e.tags.includes('success')) this.ledger.resolveKey(key);
@@ -335,7 +404,7 @@ export class Daemon {
       const was = before.get(key);
       const stallKey = `stall:work:${key}`;
       if (v.phase === 'stalled') {
-        const raised = this.ledger.raise(stallKey, {
+        const raised = this.ledger.raise(stallKey, stallCondition(v), {
           kind: 'stall',
           repo: v.repo,
           issue: v.issue,
@@ -496,9 +565,12 @@ export class Daemon {
     return this.ledger.claim(b, title);
   }
 
+  // an agent reports right after it moved the forge (opened or readied a pr, pushed): reading its repository now
+  // keeps the derived phase from lagging what the agent did until the next poll
   report(b: ReportBody): ReturnType<Ledger['report']> {
     const out = this.ledger.report(b);
     for (const d of out.decisions) this.announce(d);
+    void this.pollRepo(b.repo);
     return out;
   }
 
@@ -634,6 +706,12 @@ export class Daemon {
   async persist(): Promise<void> {
     await writeJson(this.paths.ledger, this.ledger.data);
   }
+}
+
+// what a stall stands for: the agent that left it and where its pr was, so a new head, agent or pr state is news
+function stallCondition(v: WorkView): string {
+  const pr = v.pull ? `pr #${v.pull.number} @${v.pull.sha} ${v.pull.draft ? 'draft' : `ci ${v.verdict}`}` : 'no pr';
+  return `agent ${v.agent ?? 'none'} · ${pr}`;
 }
 
 // timestamps dropped, then the error lines with what led up to them, a grep, or the tail

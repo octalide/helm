@@ -1,0 +1,5 @@
+Registers an issue agent type for the model and effort of every work item the session owns (from the lite fleet), beside the tier table, so an agent on a removed tier resumes. README notes `/reload-plugins` picks up tier changes.
+
+Checks: typecheck, vitest.
+
+Closes #45

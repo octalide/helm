@@ -269,7 +269,7 @@ export class Ledger {
     return w;
   }
 
-  decide(b: DecisionBody & { key?: string }): Decision {
+  decide(b: DecisionBody & { key?: string; condition?: string }): Decision {
     const now = this.now();
     const d: Decision = {
       id: `d${++this.data.counters.decision}`,
@@ -285,22 +285,44 @@ export class Ledger {
       ...(b.options ? { options: b.options } : {}),
       ...(b.from ? { from: b.from } : {}),
       ...(b.key ? { key: b.key } : {}),
+      ...(b.condition !== undefined ? { condition: b.condition } : {}),
     };
     this.data.decisions[d.id] = d;
     this.changed();
     return d;
   }
 
-  // a condition helmd watches: raised once while it holds, resolved once it no longer does
-  raise(key: string, b: DecisionBody): Decision | undefined {
-    if (Object.values(this.data.decisions).some((d) => d.key === key && d.state === 'open')) return undefined;
-    return this.decide({ ...b, key });
+  // a condition helmd watches: raised once while it holds, resolved once it no longer does. a person who dismissed or
+  // answered it has seen this condition, so it is not raised again until the condition changes or ends
+  raise(key: string, condition: string, b: DecisionBody): Decision | undefined {
+    const mine = Object.values(this.data.decisions).filter((d) => d.key === key);
+    const open = mine.find((d) => d.state === 'open');
+    if (open) {
+      // still the same decision, now standing for what holds now
+      if (open.condition !== condition || open.title !== b.title || open.body !== b.body) {
+        Object.assign(open, { condition, title: b.title, body: b.body, updatedAt: this.now() });
+        this.changed();
+      }
+      return undefined;
+    }
+    if (mine.some((d) => (d.state === 'dismissed' || d.state === 'answered') && d.condition === condition)) return undefined;
+    return this.decide({ ...b, key, condition });
   }
 
+  // the condition ended: an open decision on it is resolved, and a dismissal of it holds no longer
   resolveKey(key: string): Decision | undefined {
-    const d = Object.values(this.data.decisions).find((x) => x.key === key && x.state === 'open');
-    if (d) this.close(d, 'resolved');
-    return d;
+    let open: Decision | undefined;
+    for (const d of Object.values(this.data.decisions)) {
+      if (d.key !== key) continue;
+      if (d.state === 'open') {
+        open = d;
+        this.close(d, 'resolved');
+      } else if (d.condition !== undefined) {
+        delete d.condition;
+        this.changed();
+      }
+    }
+    return open;
   }
 
   answer(id: string, a: Omit<Answer, 'at'>): Decision {

@@ -3,12 +3,10 @@ import { closeSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'no
 import { mkdir } from 'node:fs/promises';
 import { request } from 'node:http';
 import { dirname, join } from 'node:path';
-import { DEFAULT_CONFIG, mergeConfig } from '../core/config.ts';
 import { helmPaths, type HelmPaths } from '../core/paths.ts';
 import type { Health } from '../core/protocol.ts';
 import { GitHub } from './github.ts';
-import { Daemon } from './helmd.ts';
-import { readJson } from './persist.ts';
+import { Daemon, readConfig } from './helmd.ts';
 import { createServer, handler, listen, routes } from './server.ts';
 
 const ROOT = join(import.meta.dirname, '..', '..');
@@ -73,8 +71,32 @@ async function serve(paths: HelmPaths): Promise<void> {
   await mkdir(paths.state, { recursive: true });
   const release = lock(paths);
   const log = (line: string) => process.stderr.write(`${new Date().toISOString()} ${line}\n`);
-  const config = mergeConfig(DEFAULT_CONFIG, await readJson(join(paths.config, 'config.json')));
-  const daemon = new Daemon({ paths, config, gh: new GitHub(), version: VERSION, log });
+  const config = await readConfig(paths);
+  let web: ReturnType<typeof createServer> | undefined;
+  let moving = Promise.resolve();
+  // the page moves with web.port, live: the old listener closes once the new one is up, one move at a time
+  const serveWeb = (port: number): Promise<void> => (moving = moving.then(() => bindWeb(port)));
+  const bindWeb = async (port: number): Promise<void> => {
+    const next = createServer(handler(table, { web: true, port, static: join(ROOT, 'web') }));
+    try {
+      await listen(next, { port, host: '127.0.0.1' });
+    } catch (e) {
+      log(`web page not served on ${port}: ${(e as Error).message}`);
+      return;
+    }
+    web?.close();
+    web = next;
+  };
+  const daemon = new Daemon({
+    paths,
+    config,
+    gh: new GitHub(),
+    version: VERSION,
+    log,
+    onConfig: (next, prev) => {
+      if (next.web.port !== prev.web.port) void serveWeb(next.web.port);
+    },
+  });
   await daemon.start();
   let stopping = false;
   const stop = async () => {
@@ -96,11 +118,7 @@ async function serve(paths: HelmPaths): Promise<void> {
   } catch {}
   const socket = createServer(handler(table, { web: false }));
   await listen(socket, paths.socket);
-  let web: ReturnType<typeof createServer> | undefined = createServer(handler(table, { web: true, port: config.web.port, static: join(ROOT, 'web') }));
-  await listen(web, { port: config.web.port, host: '127.0.0.1' }).catch((e: Error) => {
-    log(`web page not served: ${e.message}`);
-    web = undefined;
-  });
+  await serveWeb(config.web.port);
   setInterval(() => daemon.ping(), 20_000);
   process.on('SIGTERM', () => void stop());
   process.on('SIGINT', () => void stop());

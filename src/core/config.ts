@@ -26,9 +26,15 @@ export type Config = {
 export const DEFAULT_TIERS: Tier[] = [
   {
     name: 'mechanical',
+    model: 'claude-haiku-5-5',
+    effort: 'high',
+    when: 'mechanical changes with an obvious shape: version bumps, pin bumps, renames, moves, docs, data rows that follow an existing pattern, finishing a PR whose implementation is done (body, CI, ready), one-file fixes whose cause the issue already states',
+  },
+  {
+    name: 'light',
     model: 'claude-sonnet-5-5',
-    effort: 'low',
-    when: 'mechanical changes with an obvious shape: version bumps, target or platform additions that follow an existing pattern, renames, docs, one-file fixes whose cause the issue already states',
+    effort: 'medium',
+    when: 'small contained work in one module with a stated design: a focused bug fix, a test addition, a catalog or table extension that needs some judgment',
   },
   {
     name: 'standard',
@@ -40,13 +46,13 @@ export const DEFAULT_TIERS: Tier[] = [
     name: 'deep',
     model: 'claude-opus-5-5',
     effort: 'high',
-    when: 'changes that cross subsystems or public contracts, code generation, concurrency, memory layout, subtle correctness, or a bug whose root cause is not yet known',
+    when: 'changes that cross subsystems or public contracts, code generation, concurrency, memory layout, soundness, design-heavy work, or a bug whose root cause is not yet known',
   },
   {
     name: 'frontier',
     model: 'claude-fable-5-1',
     effort: 'high',
-    when: 'design-heavy or research-grade work: new language or runtime features, architecture, or a problem earlier attempts failed on',
+    when: 'reserved for extremely intelligence-heavy work where decisions have to be made: architecture, contract or language design, research-grade problems, or a problem earlier tiers failed on. Never for implementation that a lower tier can carry once the design is settled',
   },
 ];
 
@@ -77,9 +83,10 @@ export function mergeConfig(base: Config, ...layers: unknown[]): Config {
       routing: { ...out.routing, ...layer.routing },
     };
   }
-  const fallback = out.routing.tiers.find((t) => t.name === out.routing.fallback) ?? out.routing.tiers[0];
-  if (!fallback) throw new Error('routing.tiers is empty');
-  return { ...out, routing: { ...out.routing, fallback: fallback.name } };
+  const { tiers, fallback } = out.routing;
+  if (!tiers.length) throw new Error('routing.tiers is empty');
+  if (!tiers.some((t) => t.name === fallback)) throw new Error(`routing.fallback ${JSON.stringify(fallback)} names no tier; the tiers are ${tiers.map((t) => t.name).join(', ')}`);
+  return out;
 }
 
 // a repository's own .helm/config.json may only change routing: what is polled and where is the machine's

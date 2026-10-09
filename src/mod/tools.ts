@@ -48,7 +48,7 @@ export const TOOLS: Tool[] = [
     name: 'status',
     eager: true,
     description:
-      'helm status for this session: its role and repository, its work with phases (queued, working, draft, ci, failing, ready, blocked, stalled, done), open decisions, its subscriptions, letters waiting for its agents, and the web page. Call it at session start.',
+      'helm status for this session: its role and repository, its work with phases (queued, working, draft, ci, failing, ready, blocked, stalled, parked, done), open decisions, its subscriptions, letters waiting for its agents, and the web page. Call it at session start.',
     inputSchema: { type: 'object', properties: {} },
     async run(env) {
       const f = await env.client.fleet();
