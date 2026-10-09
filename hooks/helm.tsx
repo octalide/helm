@@ -36,6 +36,10 @@ function rolePrompt(r: Runtime): string | undefined {
 
 const fleetAt = atom({ plugin: 'helm', key: 'fleetAt' } as const, 0);
 const paneTab = atom({ plugin: 'helm', key: 'paneTab' } as const, 'work' as Tab);
+// the module instance that holds the session's binding. a reload swaps the hooks but can leave the replaced
+// instance's stream running, its mailbox deaf to turns, so each instance stamps itself here at session.start and
+// one that finds another stamp stands down
+const binder = atom({ plugin: 'helm', key: 'binder' } as const, '');
 let fleet: Fleet | undefined;
 
 let rt: Runtime | undefined;
@@ -148,13 +152,26 @@ function port($: $): Port {
   };
 }
 
+// false once a later instance of this module holds the binding, which this one learns of here and stands down for:
+// its timers and mailbox stop, and the stream it reads ends. a stamp that cannot be read is another's
+async function holds($: $, r: Runtime): Promise<boolean> {
+  if (!r.alive) return false;
+  const stamp = await read($, binder).catch(() => undefined);
+  if (stamp === '' || stamp === r.instance) return true;
+  r.alive = false;
+  r.timers.forEach((t) => t.cancel());
+  r.mailbox.stop();
+  $.ui.log(`helm: instance ${r.instance} stood down for ${stamp ?? 'an unreadable binding'}`, { to: 'debug' });
+  return false;
+}
+
 // letters and change notices from helmd, for the life of this module; reconnects whenever helmd goes away
 function pump($: $, r: Runtime): void {
   const run = async () => {
     try {
       let buf = '';
       for await (const piece of $.process.spawn({ argv: daemonArgv($, 'stream', r.session) })) {
-        if (!r.alive) break;
+        if (!(await holds($, r))) break;
         if (piece.stream !== 'stdout') continue;
         buf += piece.text;
         for (let i = buf.indexOf('\n'); i >= 0; i = buf.indexOf('\n')) {
@@ -166,7 +183,7 @@ function pump($: $, r: Runtime): void {
     } catch (e) {
       $.ui.log(`helm: stream ended: ${(e as Error).message}`, { to: 'debug' });
     }
-    if (!r.alive) return;
+    if (!(await holds($, r))) return;
     r.timers.push(
       $.clock.after(RECONNECT_MS, () => {
         void ensureDaemon($, r.client, r.version)
@@ -250,8 +267,8 @@ export const register: Register = (on) => {
     const out = await next(e);
     const r = rt;
     if (!r?.alive || out.deny !== undefined) return out;
-    const texts = await r.mailbox.attach(e.agentId).catch(() => []);
-    return texts.length ? { ...out, context: [...(out.context ?? []), ...texts] } : out;
+    const text = await r.mailbox.attach(e.agentId).catch(() => undefined);
+    return text === undefined ? out : { ...out, context: [...(out.context ?? []), text] };
   }).catch(($, e, next) => next(e));
 
   on('session.start', async ($, e, next) => {
@@ -272,13 +289,14 @@ export const register: Register = (on) => {
       home: (await $.env.get('HOME')) ?? '',
       session: await $.session.id(),
       role: asked && ROLES.includes(asked) ? asked : repo ? 'repo' : 'other',
+      instance: crypto.randomUUID(),
       alive: true,
       timers: [],
       ...(repo ? { repo } : {}),
       mailbox: new Mailbox({
         now: Date.now,
         take: (id) => client.take(id),
-        submit: async (text) => void (await $.prompt.submit({ text })),
+        submit: async (text) => (await $.prompt.submit({ text })).drop === undefined,
         send: async (agent, text) => {
           const sent = await $.session.send({ to: { agentId: agent }, text });
           return sent.isDelivered ? undefined : sent.reason;
@@ -290,6 +308,7 @@ export const register: Register = (on) => {
       }),
     };
     rt = r;
+    await update($, binder, () => r.instance);
 
     for (const t of tools) await $.tool.register({ name: t.name, description: t.description, inputSchema: t.inputSchema, isDeferred: !t.eager });
     await $.command.register({ name: PLUGIN, description: 'helm: status, role, web page' });
@@ -307,7 +326,7 @@ export const register: Register = (on) => {
     r.timers.push(
       $.clock.every(HEARTBEAT_MS, () => {
         void (async () => {
-          if (!r.alive) return;
+          if (!(await holds($, r))) return;
           await r.client.heartbeat(r.session, await agentRecords($)).catch(async (err: unknown) => {
             if (err instanceof HelmError && err.status === 404) await bind($, r);
           });
@@ -322,7 +341,8 @@ export const register: Register = (on) => {
     const r = rt;
     if (!r) return out;
     if (e.reason === 'clear' || e.reason === 'resume') {
-      // the process goes on under another session id, with no session.start
+      // the process goes on under another session id, with no session.start, and this instance keeps the binding
+      await update($, binder, () => r.instance).catch(() => {});
       r.timers.push($.clock.after(500, () => void bind($, r).catch(() => {})));
       return out;
     }
