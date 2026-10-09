@@ -10,7 +10,7 @@ import type { HelmPaths } from '../core/paths.ts';
 import type { AgentRecord, Decision, Fleet, ForgeState, HelmEvent, Letter, LetterPart, LocalState, Phase, PollStatus, Pull, RepoName, RepoView, Session, SessionRole, Subscription, TreeNode, Work, WorkView } from '../core/types.ts';
 import { letterText } from '../core/letter.ts';
 import { route } from './deliver.ts';
-import { buildTree } from '../core/tree.ts';
+import { ATTENTION, buildTree } from '../core/tree.ts';
 import { hasWorker, selfWorked } from '../core/work.ts';
 import { pullFor, viewOf } from './derive.ts';
 import { verdictEvent } from './events.ts';
@@ -510,6 +510,7 @@ export class Daemon {
       repos,
       ...(lite ? {} : { events: d.events.slice(-150) }),
       rates: { ...this.gh.rates },
+      attention: [...ATTENTION] as Phase[],
       at: this.now(),
     };
   }

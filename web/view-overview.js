@@ -1,5 +1,5 @@
 import { columns, legend, rollupBar, ROLLUP_LEGEND, spark, stack } from './charts.js';
-import { at, ATTENTION, done, el, empty, ext, fill, forSessions, forYou, href, keyOf, PHASE, phasePill, PHASES, phaseSince, plural, repoShort, store, visibleTree, visibleWork } from './core.js';
+import { at, done, el, empty, ext, fill, forSessions, forYou, href, keyOf, PHASE, phasePill, PHASES, phaseSince, plural, repoShort, store, visibleTree, visibleWork } from './core.js';
 import { section, where } from './parts.js';
 
 const DAY = 86400_000;
@@ -38,7 +38,7 @@ export function overview(main) {
   const open = work.filter((w) => w.phase !== 'done');
   const by = (p) => open.filter((w) => w.phase === p);
   const active = open.filter((w) => PHASE[w.phase].group === 'active');
-  const attention = open.filter((w) => ATTENTION.has(w.phase));
+  const attention = open.filter((w) => store.attention.has(w.phase));
   const decisions = f.decisions.filter(forYou);
   const waiting = decisions.filter((d) => d.blocking);
   const agents = f.sessions.filter((s) => !s.gone).flatMap((s) => s.agents.filter((a) => ['running', 'pending', 'waiting'].includes(a.status)));
@@ -51,7 +51,7 @@ export function overview(main) {
     { class: 'tiles' },
     tile('Active work', active.length, { hero: true, href: href('board'), sub: `${plural(agents.length, 'agent')} running across ${plural(f.sessions.filter((s) => !s.gone).length, 'session')}` }),
     tile('Waiting on you', waiting.length, { tone: waiting.length ? 'bad' : '', icon: 'i-ask', href: href('inbox'), sub: `${decisions.length - waiting.length} more for you · ${f.decisions.filter(forSessions).length} with sessions` }),
-    tile('Needs attention', attention.length, { tone: attention.length ? 'bad' : '', icon: 'i-alert', href: href('board'), sub: ['blocked', 'failing', 'stalled'].map((p) => `${by(p).length} ${p}`).join(' · ') }),
+    tile('Needs attention', attention.length, { tone: attention.length ? 'bad' : '', icon: 'i-alert', href: href('board'), sub: [...store.attention].map((p) => `${by(p).length} ${p}`).join(' · ') }),
     tile('In CI', by('ci').length, { icon: 'i-ci', href: href('ci'), sub: `${plural(runs.length, 'run')} in flight` }),
     tile('Ready to merge', by('ready').length, { icon: 'i-ok', href: href('board'), sub: by('ready').map((w) => `#${w.issue}`).join(' ') || 'none' }),
     tile('Done this week', week, { icon: 'i-done', sub: `${per[per.length - 1].value} today`, spark: spark(per.map((d) => d.value)), tip: 'work merged or closed, per day over 14 days' }),

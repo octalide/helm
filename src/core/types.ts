@@ -440,5 +440,7 @@ export type Fleet = {
   // the newest events, newest last; absent from a lite answer
   events?: HelmEvent[];
   rates: Record<string, { remaining: number; limit: number; resetAt: number }>;
+  // the phases where work needs someone, for the page to mark without its own copy
+  attention: Phase[];
   at: number;
 };
