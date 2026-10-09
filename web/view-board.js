@@ -1,17 +1,19 @@
 import { el, empty, fill, filter, keyOf, RANK, repoShort, sessionName, setQuery, store, visibleWork } from './core.js';
 import { workCard } from './parts.js';
 
-// the board's columns, left to right; attention gathers the three phases that need someone
+// the board's columns, left to right; the attention column takes the server's attention phases
 const COLUMNS = [
   { id: 'queued', label: 'Queued', phases: ['queued'], tone: 'queued' },
   { id: 'working', label: 'Working', phases: ['working'], tone: 'work' },
   { id: 'draft', label: 'Draft PR', phases: ['draft'], tone: 'work' },
   { id: 'ci', label: 'In CI', phases: ['ci'], tone: 'ci' },
   { id: 'ready', label: 'Ready', phases: ['ready'], tone: 'ready' },
-  { id: 'attention', label: 'Attention', phases: ['blocked', 'failing', 'stalled'], tone: 'bad' },
+  { id: 'attention', label: 'Attention', attention: true, tone: 'bad' },
   { id: 'parked', label: 'Parked', phases: ['parked'], tone: 'parked' },
   { id: 'done', label: 'Done', phases: ['done'], tone: 'done' },
 ];
+
+const phasesOf = (c) => (c.attention ? [...store.attention] : c.phases);
 
 const GROUPS = { none: 'No lanes', session: 'By session', epic: 'By epic', repo: 'By repository', tier: 'By tier' };
 const DONE_MS = 3 * 86400_000;
@@ -36,7 +38,7 @@ export function board(main) {
   const only = filter('phase');
   const now = Date.now();
   const work = visibleWork().filter((w) => w.phase !== 'done' || (w.finished && now - w.finished.at < DONE_MS) || (!w.finished && now - w.updatedAt < DONE_MS));
-  const cols = only ? COLUMNS.filter((c) => c.phases.includes(only) || c.id === only) : COLUMNS;
+  const cols = only ? COLUMNS.filter((c) => phasesOf(c).includes(only) || c.id === only) : COLUMNS;
 
   const controls = el(
     'div',
@@ -57,14 +59,14 @@ export function board(main) {
 
   const grid = el('div', { class: 'board', style: { gridTemplateColumns: `repeat(${cols.length}, minmax(176px, 1fr))` } });
   for (const c of cols) {
-    const n = work.filter((w) => c.phases.includes(w.phase)).length;
+    const n = work.filter((w) => phasesOf(c).includes(w.phase)).length;
     grid.append(el('div', { class: `bcol-head t-line-${c.tone}` }, el('span', {}, c.label), el('b', {}, n)));
   }
   for (const lane of ordered) {
     if (group !== 'none') grid.append(el('div', { class: 'lane-head', style: { gridColumn: `1 / span ${cols.length}` } }, el('b', {}, lane.label), el('span', { class: 'dim' }, ` ${lane.items.filter((w) => w.phase !== 'done').length} open`)));
     for (const c of cols) {
-      const items = lane.items.filter((w) => c.phases.includes(w.phase)).sort((a, b) => RANK[a.phase] - RANK[b.phase] || a.order - b.order);
-      grid.append(el('div', { class: 'bcol' }, items.map((w) => workCard(w, { view: 'board', pill: c.phases.length > 1 }))));
+      const items = lane.items.filter((w) => phasesOf(c).includes(w.phase)).sort((a, b) => RANK[a.phase] - RANK[b.phase] || a.order - b.order);
+      grid.append(el('div', { class: 'bcol' }, items.map((w) => workCard(w, { view: 'board', pill: phasesOf(c).length > 1 }))));
     }
   }
   fill(main, controls, work.length ? el('div', { class: 'board-wrap' }, grid) : empty('No work matches.', 'Repository sessions queue issues with backlog and start them with dispatch.'));

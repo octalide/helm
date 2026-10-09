@@ -510,7 +510,7 @@ export class Daemon {
       repos,
       ...(lite ? {} : { events: d.events.slice(-150) }),
       rates: { ...this.gh.rates },
-      attention: [...ATTENTION],
+      attention: [...ATTENTION] as Phase[],
       at: this.now(),
     };
   }

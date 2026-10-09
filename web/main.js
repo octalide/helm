@@ -1,5 +1,5 @@
 import { installTooltip } from './charts.js';
-import { $, api, ATTENTION, el, filter, FILTERS, forYou, go, href, local, parseRoute, PHASE, repoShort, sessionName, setQuery, store, tickTimes } from './core.js';
+import { $, api, el, filter, FILTERS, forYou, go, href, local, parseRoute, PHASE, repoShort, sessionName, setQuery, store, tickTimes } from './core.js';
 import { renderDrawer } from './drawer.js';
 import { installPalette, openPalette } from './palette.js';
 import { agents, routing } from './view-agents.js';
@@ -149,7 +149,7 @@ function renderFilters() {
 function renderSummary() {
   const f = store.fleet;
   const o = open(f);
-  const att = o.filter((w) => ATTENTION.has(w.phase)).length;
+  const att = o.filter((w) => store.attention.has(w.phase)).length;
   const waiting = f.decisions.filter((d) => forYou(d) && d.blocking).length;
   const g = f.rates.graphql;
   const core = f.rates.core;
