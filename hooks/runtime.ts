@@ -1,6 +1,7 @@
 import { isRepoName } from '../src/core/repo.ts';
 import type { RepoName, SessionRole } from '../src/core/types.ts';
 import { type HelmClient, HelmError } from '../src/mod/client.ts';
+import type { Install } from '../src/mod/install.ts';
 import type { Mailbox } from '../src/mod/mailbox.ts';
 import type { ToolEnv } from '../src/mod/tools.ts';
 
@@ -14,6 +15,8 @@ export const ROLES: readonly SessionRole[] = ['coordinator', 'repo', 'other'];
 export type Runtime = {
   client: HelmClient;
   version: string;
+  // this mod's own install, beside which the newest helmd is looked for
+  install: Install;
   home: string;
   session: string;
   repo?: RepoName;

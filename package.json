@@ -5,6 +5,9 @@
   "type": "module",
   "license": "MIT",
   "private": true,
+  "helm": {
+    "protocol": 2
+  },
   "engines": {
     "node": ">=24"
   },
