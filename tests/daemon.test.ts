@@ -142,6 +142,60 @@ describe('daemon', () => {
     await d.stop();
   });
 
+  it('fetches a head pushed from elsewhere before judging it, and surfaces a wait it can no longer satisfy', async () => {
+    // mine -> theirs on the remote, pushed from another machine; gone is never fetchable; unrelated shares nothing
+    const [mine, theirs, gone, unrelated] = ['a', 'b', 'c', 'd'].map((c) => c.repeat(40)) as [string, string, string, string];
+    const history = [mine, theirs];
+    const known = new Set([mine, unrelated]);
+    const fetched: string[] = [];
+    const offline = { rates: {}, conditional: async () => Promise.reject(new Error('offline')) } as unknown as GitHub;
+    const git: Git = async (_cwd, args) => {
+      if (args[0] === 'config') return 'git@github.com:o/r.git\n';
+      if (args[0] === 'cat-file' && !known.has(args[2]!.replace('^{commit}', ''))) throw new Error('missing');
+      if (args[0] === 'fetch') {
+        fetched.push(args.at(-1)!);
+        known.add(theirs);
+      }
+      if (args[0] === 'merge-base') {
+        const [a, b] = [history.indexOf(args[2]!), history.indexOf(args[3]!)];
+        if (a < 0 || b < 0 || a > b) throw new Error('not an ancestor');
+      }
+      return '';
+    };
+    const green = [check('test', 'success')];
+    const pulls = [pull(160, { sha: theirs, head: 'fix/160', checks: green }), pull(161, { sha: gone, head: 'fix/161', checks: green }), pull(162, { sha: unrelated, head: 'fix/162', checks: green })];
+    const { d } = await daemon({
+      gh: offline,
+      git,
+      setup: async (home, paths) => {
+        await mkdir(join(home, 'src', 'r', '.git'), { recursive: true });
+        await mkdir(paths.repos, { recursive: true });
+        await writeFile(join(paths.repos, 'o__r.json'), JSON.stringify({ ...emptyCache(), forge: forge({ pulls }) }));
+      },
+    });
+    d.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    const wait = (agent: string, number: number) => d.subscribe({ session: 'A', agent, repo: 'o/r', scope: { kind: 'pr', number }, ci: 'settled', until: 'settled', sha: mine });
+    const caught = (agent: string) => lettersFor(d, 'A', agent).some((l) => l.text.includes('ci settled success'));
+    // missing here, present once fetched, and on top of the named head: delivered
+    await wait('pushed on top', 160);
+    expect(fetched).toEqual(['fix/160']);
+    // still missing after the fetch: helm cannot judge it, so it delivers
+    await wait('never fetched', 161);
+    expect(fetched).toEqual(['fix/160', 'fix/161']);
+    // present and unrelated: held back, and once a later poll still shows that head the wait reads as stalled
+    const held = await wait('unrelated', 162);
+    expect(['pushed on top', 'never fetched', 'unrelated'].filter(caught)).toEqual(['pushed on top', 'never fetched']);
+    d.ledger.claim({ session: 'A', repo: 'o/r', issue: 162, agent: 'unrelated' }, 'u');
+    d.ledger.heartbeat('A', [{ id: 'unrelated', type: 'issue', description: '', status: 'idle' }]);
+    d.ledger.report({ session: 'A', agent: 'unrelated', repo: 'o/r', issue: 162, state: 'waiting' });
+    const phase = () => d.workViews().find((v) => v.issue === 162)?.phase;
+    expect(phase()).toBe('ready');
+    d.ledger.reviewHeld('o/r', (n) => pulls.find((p) => p.number === n)?.sha);
+    expect(d.ledger.data.subscriptions[held.id]?.held).toEqual({ sha: unrelated, seen: true });
+    expect(phase()).toBe('stalled');
+    await d.stop();
+  });
+
   it('applies an edited config live and keeps the running one through a broken edit', async () => {
     const log: string[] = [];
     const { d, paths } = await daemon({ log: (line) => log.push(line) });
