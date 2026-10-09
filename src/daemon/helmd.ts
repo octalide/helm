@@ -1,7 +1,8 @@
+import { type FSWatcher, watch } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isDone, verdictOf } from '../core/checks.ts';
-import { type Config, mergeConfig, repoLayer } from '../core/config.ts';
+import { type Config, DEFAULT_CONFIG, mergeConfig, repoLayer } from '../core/config.ts';
 import type { AnswerBody, Answered, ClaimBody, ConfigView, DecisionBody, IssueDetail, QueueBody, RegisterBody, ReportBody, StreamFrame, SubscribeBody } from '../core/protocol.ts';
 import { workKey } from '../core/protocol.ts';
 import type { HelmPaths } from '../core/paths.ts';
@@ -29,7 +30,20 @@ export type DaemonDeps = {
   git?: Git;
   // off in tests, which drive polls by hand
   loops?: boolean;
+  // told of every config applied after start, for what lives outside the daemon such as the web listener
+  onConfig?: (next: Config, prev: Config) => void;
 };
+
+// the machine's config: the defaults under ~/.config/helm/config.json
+export async function readConfig(paths: HelmPaths): Promise<Config> {
+  const file = join(paths.config, 'config.json');
+  const raw = await readJson(file);
+  try {
+    return mergeConfig(DEFAULT_CONFIG, raw);
+  } catch (error) {
+    throw new Error(`${file}: ${(error as Error).message}`);
+  }
+}
 
 // again: asked for while it ran, so it runs once more as soon as it finishes
 type Poll = PollStatus & { due: number; running: boolean; again?: boolean };
@@ -62,6 +76,7 @@ export class Daemon {
   private readonly log: (line: string) => void;
   private readonly git: Git;
   private readonly loops: boolean;
+  private readonly onConfig: (next: Config, prev: Config) => void;
   private readonly pollers = new Map<RepoName, RepoPoller>();
   private readonly savers = new Map<RepoName, Saver>();
   private readonly local = new Map<RepoName, LocalState>();
@@ -79,6 +94,9 @@ export class Daemon {
   private notifyTimer?: ReturnType<typeof setTimeout>;
   private refreshTimer?: ReturnType<typeof setTimeout>;
   private scanning = false;
+  private localTimer?: ReturnType<typeof setInterval>;
+  private configWatcher?: FSWatcher;
+  private configTimer?: ReturnType<typeof setTimeout>;
 
   constructor(deps: DaemonDeps) {
     this.paths = deps.paths;
@@ -89,6 +107,7 @@ export class Daemon {
     this.log = deps.log ?? (() => {});
     this.git = deps.git ?? realGit;
     this.loops = deps.loops ?? true;
+    this.onConfig = deps.onConfig ?? (() => {});
     this.startedAt = this.now();
     this.ledger = new Ledger(emptyLedger(), this.now);
   }
@@ -101,17 +120,59 @@ export class Daemon {
     this.refreshViews();
     if (!this.loops) return;
     this.timers.push(setInterval(() => void this.schedule(), 1000));
-    this.timers.push(setInterval(() => void this.scanLocal(), this.config.poll.local * 1000));
+    this.armLocal();
     this.timers.push(setInterval(() => this.sweep(), 15_000));
     void this.scanLocal();
+    await this.watchConfig();
   }
 
   async stop(): Promise<void> {
     for (const t of this.timers) clearInterval(t);
+    clearInterval(this.localTimer);
+    clearTimeout(this.configTimer);
+    this.configWatcher?.close();
     clearTimeout(this.notifyTimer);
     clearTimeout(this.refreshTimer);
     await this.ledgerSaver?.flush();
     await Promise.all([...this.savers.values()].map((s) => s.flush()));
+  }
+
+  private armLocal(): void {
+    clearInterval(this.localTimer);
+    if (this.loops) this.localTimer = setInterval(() => void this.scanLocal(), this.config.poll.local * 1000);
+  }
+
+  // the directory, not the file: an editor that saves by renaming over the file would leave a file watch on the old one
+  private async watchConfig(): Promise<void> {
+    await mkdir(this.paths.config, { recursive: true });
+    this.configWatcher = watch(this.paths.config, (_, name) => {
+      if (name && name !== 'config.json') return;
+      clearTimeout(this.configTimer);
+      this.configTimer = setTimeout(() => void this.reloadConfig(), 200);
+    });
+    this.configWatcher.on('error', (e) => this.log(`config watch failed: ${e.message}`));
+  }
+
+  // the config file read again and applied; one that fails to parse or check is logged and the running config kept
+  async reloadConfig(): Promise<void> {
+    let next: Config;
+    try {
+      next = await readConfig(this.paths);
+    } catch (error) {
+      this.log(`config not applied, keeping the running one: ${(error as Error).message}`);
+      return;
+    }
+    const prev = this.config;
+    if (JSON.stringify(next) === JSON.stringify(prev)) return;
+    this.config = next;
+    if (next.poll.local !== prev.poll.local) this.armLocal();
+    if (JSON.stringify(next.roots) !== JSON.stringify(prev.roots)) {
+      this.discoveredAt = 0;
+      if (this.loops) void this.scanLocal();
+    }
+    this.onConfig(next, prev);
+    this.log('config applied');
+    this.changed();
   }
 
   // every repository polled now: the configured ones, those a live session works in, those with unfinished work or a
