@@ -11,22 +11,26 @@ const ev = (over: Partial<HelmEvent>): HelmEvent => ({ id: 'e', kind: 'issue', r
 describe('matches', () => {
   it('gives the fleet by default only what needs the coordinator', () => {
     const s = sub({ scope: { kind: 'fleet' }, repo: undefined });
-    const work = (phase: string, epic?: string) => ev({ kind: 'work', issue: 2, tags: ['phase', phase], ...(epic ? { epic } : {}) });
+    const work = (tags: string[], epic?: string) => ev({ kind: 'work', issue: 2, tags, ...(epic ? { epic } : {}) });
     for (const epic of ['o/r#1', undefined]) {
-      for (const phase of ['working', 'draft', 'ci', 'ready', 'done']) expect(matches(work(phase, epic), s, ctx)).toBe(false);
-      for (const phase of ['blocked', 'failing', 'stalled']) expect(matches(work(phase, epic), s, ctx)).toBe(true);
+      for (const phase of ['working', 'draft', 'ci', 'ready', 'done']) expect(matches(work(['phase', phase], epic), s, ctx)).toBe(false);
+      for (const phase of ['blocked', 'failing', 'stalled']) expect(matches(work(['phase', phase], epic), s, ctx)).toBe(true);
+      for (const tag of ['leftovers', 'adopted', 'returned']) expect(matches(work([tag], epic), s, ctx)).toBe(true);
     }
     expect(matches(ev({ kind: 'epic', issue: 1, tags: ['progress'] }), s, ctx)).toBe(false);
     expect(matches(ev({ kind: 'epic', issue: 1, tags: ['progress', 'complete'] }), s, ctx)).toBe(true);
     expect(matches(ev({ kind: 'decision', tags: ['decision', 'question'] }), s, ctx)).toBe(true);
-    for (const tag of ['answered', 'leftovers', 'adopted', 'returned']) expect(matches(ev({ kind: tag === 'answered' ? 'decision' : 'work', tags: [tag] }), s, ctx)).toBe(true);
+    expect(matches(ev({ kind: 'decision', tags: ['answered'] }), s, ctx)).toBe(true);
     expect(matches(ev({ kind: 'epic', issue: 1, tags: ['progress', 'complete'] }), sub({ scope: { kind: 'work' } }), ctx)).toBe(false);
     expect(matches(ev({ kind: 'epic', issue: 1, tags: ['progress', 'complete'] }), sub({}), ctx)).toBe(false);
   });
 
-  it('lets an explicit tag list override the fleet default', () => {
+  it('lets an explicit tag list override the fleet default, with epic batching kept', () => {
     const s = sub({ scope: { kind: 'fleet' }, repo: undefined, tags: ['phase', 'progress'] });
-    expect(matches(ev({ kind: 'work', issue: 2, epic: 'o/r#1', tags: ['phase', 'ci'] }), s, ctx)).toBe(true);
+    const work = (tags: string[], epic?: string) => ev({ kind: 'work', issue: 2, tags, ...(epic ? { epic } : {}) });
+    expect(matches(work(['phase', 'ci'], 'o/r#1'), s, ctx)).toBe(false);
+    expect(matches(work(['phase', 'ci']), s, ctx)).toBe(true);
+    expect(matches(work(['phase', 'blocked'], 'o/r#1'), s, ctx)).toBe(true);
     expect(matches(ev({ kind: 'epic', issue: 1, tags: ['progress'] }), s, ctx)).toBe(true);
     expect(matches(ev({ kind: 'decision', tags: ['decision', 'question'] }), s, ctx)).toBe(false);
   });
