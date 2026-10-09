@@ -72,7 +72,7 @@ export function routing(main) {
     { class: 'tiles' },
     el('div', { class: 'tile hero' }, el('div', { class: 'tile-label' }, 'Routed'), el('div', { class: 'tile-value' }, String(routed.length)), el('div', { class: 'tile-sub' }, `${judged.length} by the judge · ${routed.filter((w) => w.routing.by === 'caller').length} named · ${routed.filter((w) => w.routing.by === 'human').length} by you`)),
     el('div', { class: 'tile' }, el('div', { class: 'tile-label' }, 'Mean confidence'), el('div', { class: 'tile-value' }, mean === null ? '–' : `${mean}%`), el('div', { class: 'tile-sub' }, `over ${plural(conf.length, 'judged pick')}`)),
-    el('div', { class: `tile${picks.filter((d) => d.state === 'open').length ? ' k-warn' : ''}` }, el('div', { class: 'tile-label' }, 'For review'), el('div', { class: 'tile-value' }, String(picks.filter((d) => d.state === 'open').length)), el('div', { class: 'tile-sub' }, el('a', { href: href('inbox', '', { kind: 'routing' }) }, 'open in inbox →'))),
+    el('div', { class: `tile${picks.filter((d) => d.state === 'open').length ? ' k-warn' : ''}` }, el('div', { class: 'tile-label' }, 'For review'), el('div', { class: 'tile-value' }, String(picks.filter((d) => d.state === 'open').length)), el('div', { class: 'tile-sub' }, el('a', { href: href('review', '', { kind: 'routing' }) }, 'open in review →'))),
     el('div', { class: 'tile' }, el('div', { class: 'tile-label' }, 'Rerouted'), el('div', { class: 'tile-value' }, String(rerouted)), el('div', { class: 'tile-sub' }, `of ${plural(picks.length, 'logged pick')}`)),
   );
 

@@ -3,8 +3,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isDone, verdictOf } from '../core/checks.ts';
 import { type Config, DEFAULT_CONFIG, mergeConfig, repoLayer } from '../core/config.ts';
-import type { AnswerBody, Answered, ClaimBody, ConfigView, DecisionBody, IssueDetail, QueueBody, RegisterBody, ReportBody, StreamFrame, SubscribeBody } from '../core/protocol.ts';
-import { workKey } from '../core/protocol.ts';
+import { isRecord } from '../core/decision.ts';
+import type { AnswerBody, Answered, ClaimBody, ConfigView, DecisionBody, EscalateBody, IssueDetail, QueueBody, RegisterBody, ReportBody, StreamFrame, SubscribeBody } from '../core/protocol.ts';
+import { PROTOCOL, workKey } from '../core/protocol.ts';
 import type { HelmPaths } from '../core/paths.ts';
 import type { AgentRecord, Decision, Fleet, ForgeState, HelmEvent, Letter, LocalState, Phase, PollStatus, Pull, RepoName, RepoView, Session, SessionRole, Subscription, TreeNode, WorkView } from '../core/types.ts';
 import { route } from './deliver.ts';
@@ -252,6 +253,11 @@ export class Daemon {
       delete st.error;
       st.lastPoll = this.now();
       if (changed) st.lastChange = st.lastPoll;
+      this.ledger.reviewHeld(repo, (n) => {
+        const pull = p.forge?.pulls.find((x) => x.number === n && x.state === 'open');
+        const verdict = pull ? verdictOf(pull.checks) : 'none';
+        return pull && (verdict === 'success' || verdict === 'failure') ? pull.sha : undefined;
+      });
       if (events.length) this.handle(repo, events, await this.heldHeads(repo, events));
       if (changed) this.changed();
     } catch (error) {
@@ -301,7 +307,10 @@ export class Daemon {
 
   private sweep(): void {
     const gone = this.ledger.sweep(this.config.poll.goneSeconds * 1000);
-    for (const s of gone) this.log(`session ${s.id} went quiet`);
+    for (const s of gone) {
+      this.log(`session ${s.id} went quiet`);
+      this.orphan(s.id);
+    }
     const now = this.now();
     for (const s of Object.values(this.ledger.data.subscriptions)) {
       if (expired(s, now) || ended(s, s.repo ? this.pollers.get(s.repo)?.forge : undefined)) this.ledger.unsubscribe(s.id);
@@ -420,7 +429,6 @@ export class Daemon {
           title: `#${v.issue} has no live agent`,
           body: `${v.title}\nagent ${v.agent ?? 'none'} is ${v.agentStatus ?? 'unknown'}${v.pull ? `, pr #${v.pull.number} is ${v.pull.draft ? 'a draft' : 'open'} with ci ${v.verdict}` : ', no pr'}. Resume it with dispatch, or release it.`,
           blocking: false,
-          ...(v.owner ? { from: { session: v.owner } } : {}),
         });
         if (raised) this.announce(raised);
       } else this.ledger.resolveKey(stallKey);
@@ -433,6 +441,7 @@ export class Daemon {
         at: this.now(),
         tags: ['phase', v.phase],
         text: `${key} ${was ?? 'new'} → ${v.phase}: ${v.title}`,
+        phase: { from: was ?? 'new', to: v.phase, title: v.title },
         detail: [
           [v.agent ? `agent ${v.agent} (${v.agentStatus ?? '?'})` : selfWorked(v) ? 'worked by its session' : 'no agent', v.routing ? `${v.routing.model}/${v.routing.effort}` : '', v.pull ? `pr #${v.pull.number}` : '', v.verdict !== 'none' ? `ci ${v.verdict}` : '']
             .filter(Boolean)
@@ -469,8 +478,9 @@ export class Daemon {
   workViews(): WorkView[] {
     const sessions = new Map(Object.entries(this.ledger.data.sessions));
     const decisions = Object.values(this.ledger.data.decisions);
+    const subscriptions = Object.values(this.ledger.data.subscriptions);
     return Object.values(this.ledger.data.work)
-      .map((w) => viewOf(w, this.pollers.get(w.repo)?.forge, this.local.get(w.repo), sessions, decisions, this.now()))
+      .map((w) => viewOf(w, this.pollers.get(w.repo)?.forge, this.local.get(w.repo), sessions, decisions, this.now(), subscriptions))
       .sort((a, b) => (a.owner ?? '').localeCompare(b.owner ?? '') || a.order - b.order);
   }
 
@@ -611,7 +621,7 @@ export class Daemon {
     if (verdict !== 'success' && verdict !== 'failure') return;
     // right after a push the forge can still show the old head: its verdict is not the one the subscriber waits on,
     // and the live verdict comes once ci settles on the new head
-    if (await this.holds(repo, sub, pull.sha)) return;
+    if (await this.holds(repo, sub, pull.sha, pull.number)) return this.ledger.holdBack(sub.id, pull.sha);
     this.dispatch([verdictEvent(repo, pull, verdict, this.now())], { only: [sub] });
   }
 
@@ -628,29 +638,42 @@ export class Daemon {
   }
 
   // whether ci on sha is not the verdict a subscription waits on. a named head takes only itself and what descends
-  // from it, so a pre-rebase head is held back too. a guessed head holds back only what it strictly descends from:
-  // a missing object or any other answer delivers, since the guess can itself be the stale side
-  private async holds(repo: RepoName, sub: Subscription, sha: string): Promise<boolean> {
+  // from it, so a pre-rebase head is held back too. a guessed head holds back only what it strictly descends from,
+  // since the guess can itself be the stale side. either way a pair helm cannot judge delivers
+  private async holds(repo: RepoName, sub: Subscription, sha: string, pr: number): Promise<boolean> {
     if (!sub.head || sameSha(sha, sub.head)) return false;
-    return sub.named ? !(await this.descends(repo, sha, sub.head)) : this.descends(repo, sub.head, sha);
+    return sub.named ? (await this.descends(repo, pr, sha, sub.head)) === false : (await this.descends(repo, pr, sub.head, sha)) === true;
   }
 
-  // whether a checkout of the repository knows head to descend from base
-  private async descends(repo: RepoName, head: string, base: string): Promise<boolean> {
-    for (const checkout of this.checkouts.get(repo) ?? []) {
-      if (await this.git(checkout, ['merge-base', '--is-ancestor', base, head]).then(() => true, () => false)) return true;
-    }
-    return false;
+  // whether head descends from base, by a checkout that has both commits. when none has them, the pr's head is
+  // fetched into one, since a head pushed from another machine or a fork is in no checkout here; undefined when
+  // still missing
+  private async descends(repo: RepoName, pr: number, head: string, base: string): Promise<boolean | undefined> {
+    const checkouts = this.checkouts.get(repo) ?? [];
+    const has = async (checkout: string) => {
+      for (const sha of [head, base]) if (!(await this.git(checkout, ['cat-file', '-e', `${sha}^{commit}`]).then(() => true, () => false))) return false;
+      return true;
+    };
+    const judge = (checkout: string) => this.git(checkout, ['merge-base', '--is-ancestor', base, head]).then(() => true, () => false);
+    for (const checkout of checkouts) if (await has(checkout)) return judge(checkout);
+    const into = checkouts[0];
+    if (!into) return undefined;
+    await this.git(into, ['fetch', '--quiet', 'origin', `pull/${pr}/head`]).catch((error: Error) => this.log(`${repo} fetch of pr #${pr} failed: ${error.message}`));
+    return (await has(into)) ? judge(into) : undefined;
   }
 
   // the ci events of a poll that are on a head some pr subscription does not wait on
   private async heldHeads(repo: RepoName, events: HelmEvent[]): Promise<Set<string>> {
     const out = new Set<string>();
     const subs = Object.values(this.ledger.data.subscriptions).filter((s) => s.repo === repo && s.head);
+    const pulls = this.forgeOf(repo)?.pulls ?? [];
     for (const e of events) {
       if (e.kind !== 'ci' || e.pr === undefined || !e.sha) continue;
+      const pull = pulls.find((p) => p.number === e.pr);
       for (const s of subs) {
-        if (s.scope.kind === 'pr' && s.scope.number === e.pr && (await this.holds(repo, s, e.sha))) out.add(heldKey(s.id, e.sha));
+        if (s.scope.kind !== 'pr' || s.scope.number !== e.pr || !(await this.holds(repo, s, e.sha, e.pr))) continue;
+        out.add(heldKey(s.id, e.sha));
+        if (e.tags.includes('settled') && pull?.state === 'open' && pull.sha === e.sha) this.ledger.holdBack(s.id, e.sha);
       }
     }
     return out;
@@ -681,8 +704,14 @@ export class Daemon {
     return d;
   }
 
+  // only what is the person's carries the decision tag the fleet hears; a record or a session's own decision is in the
+  // log for whoever looks
   private announce(d: Decision): void {
     const owner = d.from?.session ?? this.ownerOf(d);
+    const where = d.repo ? ` ${d.repo}${d.issue !== undefined ? `#${d.issue}` : ''}` : '';
+    const text = isRecord(d)
+      ? `${d.kind} ${d.id} recorded for review${where}: ${d.title}`
+      : `decision ${d.id} ${d.blocking ? 'waiting' : 'open'} for ${d.to === 'person' ? 'the person' : `session ${d.session}`} (${d.kind})${where}: ${d.title}`;
     this.dispatch([
       {
         id: `decision:${d.id}:opened`,
@@ -690,9 +719,43 @@ export class Daemon {
         ...(d.repo ? { repo: d.repo } : {}),
         ...(d.issue !== undefined ? { issue: d.issue } : {}),
         at: this.now(),
-        tags: ['decision', d.kind, ...(d.blocking ? ['blocking'] : [])],
-        text: `decision ${d.id} ${d.blocking ? 'waiting' : 'for review'} (${d.kind})${d.repo ? ` ${d.repo}${d.issue !== undefined ? `#${d.issue}` : ''}` : ''}: ${d.title}`,
+        tags: [isRecord(d) ? 'record' : d.to === 'person' ? 'decision' : 'session', d.kind, ...(d.blocking ? ['blocking'] : [])],
+        text,
         ...(owner ? { owner } : {}),
+      },
+    ]);
+  }
+
+  escalate(id: string, b: EscalateBody): Decision {
+    const was = this.ledger.data.decisions[id]?.session;
+    const d = this.ledger.escalate(id, b.by, b.note);
+    this.escalated(d, was);
+    return d;
+  }
+
+  endSession(id: string): void {
+    this.ledger.endSession(id);
+    this.orphan(id);
+  }
+
+  // a session gone with decisions addressed to it leaves them to the person
+  private orphan(session: string): void {
+    for (const d of this.ledger.orphaned(session)) this.escalated(d, session);
+  }
+
+  private escalated(d: Decision, from: string | undefined): void {
+    const where = d.repo ? ` ${d.repo}${d.issue !== undefined ? `#${d.issue}` : ''}` : '';
+    this.dispatch([
+      {
+        id: `decision:${d.id}:escalated`,
+        kind: 'decision',
+        ...(d.repo ? { repo: d.repo } : {}),
+        ...(d.issue !== undefined ? { issue: d.issue } : {}),
+        at: this.now(),
+        tags: ['decision', 'escalated', d.kind, ...(d.blocking ? ['blocking'] : [])],
+        text: `decision ${d.id} escalated to the person by ${d.escalated?.by ?? 'helm'} (${d.kind})${where}: ${d.title}`,
+        ...(d.escalated?.note ? { detail: [d.escalated.note] } : {}),
+        ...(from ? { owner: from } : {}),
       },
     ]);
   }
@@ -715,7 +778,7 @@ export class Daemon {
       }
     }
     const live = recipient && this.ledger.live(recipient.session);
-    if (recipient && live) this.send(this.ledger.post({ session: recipient.session, ...(recipient.agent ? { agent: recipient.agent } : {}), text: lines.join('\n'), events: [], subs: [] }));
+    if (recipient && live) this.send(this.ledger.post({ session: recipient.session, ...(recipient.agent ? { agent: recipient.agent } : {}), text: lines.join('\n'), parts: [{ lines }], events: [], subs: [] }));
     const owner = recipient?.session;
     const event: HelmEvent = {
       id: `decision:${d.id}:answered@${this.now()}`,
@@ -736,7 +799,7 @@ export class Daemon {
     const set = this.streams.get(session) ?? new Set();
     set.add(write);
     this.streams.set(session, set);
-    write({ type: 'hello', version: this.version, protocol: 1 });
+    write({ type: 'hello', version: this.version, protocol: PROTOCOL });
     for (const l of this.ledger.pending(session)) write({ type: 'letter', letter: l });
     return () => {
       set.delete(write);

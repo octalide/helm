@@ -1,50 +1,91 @@
 import { stack } from './charts.js';
-import { api, at, done, el, empty, ext, fill, filter, local, passing, plural, repoShort, setQuery, store } from './core.js';
+import { api, at, audience, done, el, empty, ext, fill, filter, forSessions, forYou, isRecord, local, passing, plural, RECORDS, repoShort, setQuery, store } from './core.js';
 import { ciBar, jobList, section, where } from './parts.js';
 
-const KINDS = ['question', 'choice', 'routing', 'stall', 'failure'];
+const KINDS = ['question', 'stall', 'failure'];
+const RECORD_KINDS = [...RECORDS];
 
+// the person's open decisions as cards, then what sessions are handling, muted and never counted, then what settled
 export function inbox(main, reload) {
-  const kind = filter('kind');
-  const all = store.fleet.decisions.filter((d) => d.state === 'open');
-  const open = all.filter((d) => !kind || d.kind === kind).sort((a, b) => Number(b.blocking) - Number(a.blocking) || b.createdAt - a.createdAt);
+  const kind = KINDS.includes(filter('kind')) ? filter('kind') : '';
+  const f = store.fleet;
+  const byNewest = (a, b) => Number(b.blocking) - Number(a.blocking) || b.createdAt - a.createdAt;
+  const mine = f.decisions.filter(forYou);
+  const open = mine.filter((d) => !kind || d.kind === kind).sort(byNewest);
+  const theirs = f.decisions.filter((d) => forSessions(d) && (!kind || d.kind === kind)).sort(byNewest);
   // the cards keep their place across redraws, so an answer being written keeps its focus
   if (main.dataset.view !== 'inbox' || !main.querySelector('#cards')) {
-    fill(main, el('div', { id: 'inbox-tools' }), el('div', { id: 'cards', class: 'cards' }), el('div', { id: 'inbox-settled' }));
+    fill(main, el('div', { id: 'inbox-tools' }), el('div', { id: 'cards', class: 'cards' }), el('div', { id: 'inbox-sessions' }), el('div', { id: 'inbox-settled' }));
     main.dataset.view = 'inbox';
   }
   main.querySelector('#inbox-tools').replaceChildren(
     el(
       'div',
       { class: 'toolbar' },
-      el('div', { class: 'seg' }, el('button', { type: 'button', class: kind ? '' : 'on', onclick: () => setQuery({ kind: null }) }, `All ${all.length}`), KINDS.map((k) => el('button', { type: 'button', class: kind === k ? 'on' : '', onclick: () => setQuery({ kind: k }) }, `${k} ${all.filter((d) => d.kind === k).length}`))),
+      el('div', { class: 'seg' }, el('button', { type: 'button', class: kind ? '' : 'on', onclick: () => setQuery({ kind: null }) }, `All ${mine.length}`), KINDS.map((k) => el('button', { type: 'button', class: kind === k ? 'on' : '', onclick: () => setQuery({ kind: k }) }, `${k} ${mine.filter((d) => d.kind === k).length}`))),
       el('span', { class: 'grow' }),
       el('span', { class: 'dim small' }, 'an answer resumes the agent waiting on it · ctrl+enter sends'),
     ),
   );
   const cards = main.querySelector('#cards');
-  if (!open.length) cards.replaceChildren(empty(kind ? `No open ${kind} decisions.` : 'Nothing waits on you.', 'Questions agents are stopped on, choices they made without you, routing picks and stalls land here.'));
+  if (!open.length) cards.replaceChildren(empty(kind ? `No open ${kind} decisions for you.` : 'Nothing waits on you.', 'Questions a session hands on to you, your sessions\' own questions, stalls and failures nobody else owns land here. Choices and routing picks are in Review.'));
   else {
     if (cards.querySelector('.empty')) cards.replaceChildren();
     patchCards(cards, open, reload);
   }
-  const settled = store.fleet.decisions.filter((d) => d.state !== 'open').sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 60);
+  const sessions = main.querySelector('#inbox-sessions');
+  if (!theirs.length) sessions.replaceChildren();
+  else {
+    if (!sessions.querySelector('#cards-sessions')) sessions.replaceChildren(section('For sessions', el('span', { class: 'count' }, ''), el('div', { id: 'cards-sessions', class: 'cards' })));
+    sessions.querySelector('.count').textContent = theirs.length;
+    patchCards(sessions.querySelector('#cards-sessions'), theirs, reload);
+  }
+  const settled = f.decisions.filter((d) => d.state !== 'open' && !isRecord(d)).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 60);
   main.querySelector('#inbox-settled').replaceChildren(
     section(
       'Settled',
       el('span', { class: 'count' }, settled.length || ''),
-      settled.length
-        ? el('div', { class: 'list' }, settled.map((d) => el('div', { class: 'row' }, el('span', { class: 'chip kind' }, d.kind), el('span', { class: 'grow' }, where(d), ' ', d.title, d.answer ? el('span', { class: 'dim' }, ` → ${d.answer.option ? `${d.answer.option} ` : ''}${d.answer.text} (${d.answer.by})`) : ''), el('span', { class: 'dim' }, d.state, ' · ', at(d.updatedAt, ' ago')))))
-        : empty('None yet.'),
+      settled.length ? el('div', { class: 'list' }, settled.map(settledRow)) : empty('None yet.'),
     ),
   );
 }
+
+// choices and routing picks, newest first: unreviewed as cards that take feedback or a reroute, then those reviewed
+export function review(main, reload) {
+  const kind = RECORD_KINDS.includes(filter('kind')) ? filter('kind') : '';
+  const records = store.fleet.decisions.filter((d) => isRecord(d) && (!kind || d.kind === kind)).sort((a, b) => b.createdAt - a.createdAt);
+  const open = records.filter((d) => d.state === 'open');
+  const reviewed = records.filter((d) => d.state !== 'open').slice(0, 60);
+  if (main.dataset.view !== 'review' || !main.querySelector('#cards')) {
+    fill(main, el('div', { id: 'review-tools' }), el('div', { id: 'cards', class: 'cards' }), el('div', { id: 'review-done' }));
+    main.dataset.view = 'review';
+  }
+  const all = store.fleet.decisions.filter((d) => isRecord(d) && d.state === 'open');
+  main.querySelector('#review-tools').replaceChildren(
+    el(
+      'div',
+      { class: 'toolbar' },
+      el('div', { class: 'seg' }, el('button', { type: 'button', class: kind ? '' : 'on', onclick: () => setQuery({ kind: null }) }, `All ${all.length}`), RECORD_KINDS.map((k) => el('button', { type: 'button', class: kind === k ? 'on' : '', onclick: () => setQuery({ kind: k }) }, `${k} ${all.filter((d) => d.kind === k).length}`))),
+      el('span', { class: 'grow' }),
+      el('span', { class: 'dim small' }, 'records of what was decided without you; nothing here waits on you'),
+    ),
+  );
+  const cards = main.querySelector('#cards');
+  if (!open.length) cards.replaceChildren(empty('Nothing left to review.', 'Choices agents and sessions made without you, and every routing pick, land here.'));
+  else {
+    if (cards.querySelector('.empty')) cards.replaceChildren();
+    patchCards(cards, open, reload);
+  }
+  main.querySelector('#review-done').replaceChildren(section('Reviewed', el('span', { class: 'count' }, reviewed.length || ''), reviewed.length ? el('div', { class: 'list' }, reviewed.map(settledRow)) : empty('None yet.')));
+}
+
+const settledRow = (d) => el('div', { class: 'row' }, el('span', { class: 'chip kind' }, d.kind), el('span', { class: 'grow' }, where(d), ' ', d.title, d.answer ? el('span', { class: 'dim' }, ` → ${d.answer.option ? `${d.answer.option} ` : ''}${d.answer.text} (${d.answer.by})`) : ''), el('span', { class: 'dim' }, d.state === 'dismissed' && isRecord(d) ? 'reviewed' : d.state, ' · ', at(d.updatedAt, ' ago')));
 
 function patchCards(container, items, reload) {
   const old = new Map([...container.children].map((n) => [n.dataset.key, n]));
   container.replaceChildren(
     ...items.map((d) => {
-      const sig = JSON.stringify([d.state, d.title, d.body, d.options, d.updatedAt]);
+      const sig = JSON.stringify([d.state, d.title, d.body, d.options, d.to, d.session, d.updatedAt]);
       const held = old.get(d.id);
       if (held && held.dataset.sig === sig) return held;
       const n = decisionCard(d, reload);
@@ -55,8 +96,10 @@ function patchCards(container, items, reload) {
   );
 }
 
+// a record takes feedback and is marked reviewed; a decision is answered, and one for a session is muted and named so
 function decisionCard(d, reload) {
-  const text = el('textarea', { placeholder: d.blocking ? 'Your answer, sent to the agent waiting on it' : 'Feedback, sent to whoever made the call (optional)', rows: 2 });
+  const record = isRecord(d);
+  const text = el('textarea', { placeholder: record ? 'Feedback, sent to whoever made the call (optional)' : d.to === 'session' ? 'Step in: your answer, sent to the agent waiting on it' : 'Your answer, sent to the agent waiting on it', rows: 2 });
   const status = el('span', { class: 'meta' });
   const send = async (option) => {
     if (!option && !text.value.trim()) {
@@ -82,16 +125,17 @@ function decisionCard(d, reload) {
   };
   return el(
     'article',
-    { class: `card${d.blocking ? ' blocking' : ''}` },
-    el('div', { class: 'head' }, el('span', { class: 'chip kind' }, d.kind), d.blocking ? el('span', { class: 'pill t-bad' }, 'waiting') : '', where(d), el('span', { class: 'grow' }), el('span', { class: 'meta' }, d.id, ' · ', at(d.createdAt, ' ago'))),
+    { class: `card${d.blocking && d.to === 'person' ? ' blocking' : ''}${!record && d.to === 'session' ? ' muted' : ''}` },
+    el('div', { class: 'head' }, el('span', { class: 'chip kind' }, d.kind), d.blocking ? el('span', { class: `pill ${d.to === 'person' ? 't-bad' : 't-queued'}` }, 'waiting') : '', record ? '' : el('span', { class: 'chip' }, audience(d, store.fleet.sessions)), where(d), el('span', { class: 'grow' }), el('span', { class: 'meta' }, d.id, ' · ', at(d.createdAt, ' ago'))),
     el('div', { class: 'title' }, d.title),
     d.body ? el('div', { class: 'body' }, d.body) : '',
     d.from ? el('div', { class: 'meta' }, `from ${d.from.agent ? `agent ${d.from.agent.slice(0, 10)} in ` : ''}session ${d.from.session.slice(0, 8)}`) : '',
+    d.escalated ? el('div', { class: 'meta' }, `escalated by ${d.escalated.by}${d.escalated.note ? `: ${d.escalated.note}` : ''}`) : '',
     el(
       'form',
       { onsubmit: (e) => (e.preventDefault(), send()), onkeydown: (e) => e.key === 'Enter' && (e.metaKey || e.ctrlKey) && (e.preventDefault(), send()) },
       text,
-      el('div', { class: 'actions' }, d.kind === 'routing' && d.options ? el('span', { class: 'meta' }, 'reroute to') : '', (d.options || []).map((o) => el('button', { type: 'button', onclick: () => send(o) }, o)), el('span', { class: 'grow' }), status, el('button', { class: 'quiet', type: 'button', onclick: dismiss }, d.blocking ? 'Dismiss' : 'Reviewed'), el('button', { class: 'primary', type: 'submit' }, d.blocking ? 'Answer' : 'Send')),
+      el('div', { class: 'actions' }, d.kind === 'routing' && d.options ? el('span', { class: 'meta' }, 'reroute to') : '', (d.options || []).map((o) => el('button', { type: 'button', onclick: () => send(o) }, o)), el('span', { class: 'grow' }), status, el('button', { class: 'quiet', type: 'button', onclick: dismiss }, record ? 'Reviewed' : 'Dismiss'), el('button', { class: 'primary', type: 'submit' }, record ? 'Send' : 'Answer')),
     ),
   );
 }

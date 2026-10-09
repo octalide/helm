@@ -1,3 +1,4 @@
+import { eventPart, fold, letterText } from '../core/letter.ts';
 import type { HelmEvent, Letter, Subscription } from '../core/types.ts';
 import { expired, type MatchContext, matches, retiredBy } from './watch.ts';
 
@@ -24,27 +25,16 @@ export function route(events: readonly HelmEvent[], subs: readonly Subscription[
       byRecipient.set(key, box);
     }
   }
-  const letters = [...byRecipient.values()].map((box) => ({
-    session: box.session,
-    ...(box.agent ? { agent: box.agent } : {}),
-    text: letterText(box.items),
-    events: box.items.map((i) => i.event.id),
-    subs: [...new Set(box.items.flatMap((i) => i.subs))],
-  }));
+  const letters = [...byRecipient.values()].map((box) => {
+    const parts = fold(box.items.map((i) => eventPart(i.event, i.subs)));
+    return {
+      session: box.session,
+      ...(box.agent ? { agent: box.agent } : {}),
+      text: letterText(parts),
+      parts,
+      events: box.items.map((i) => i.event.id),
+      subs: [...new Set(box.items.flatMap((i) => i.subs))],
+    };
+  });
   return { letters, retired: [...retired] };
-}
-
-// grouped under a header per repository, each event its line, its detail indented, then where to look and which
-// subscriptions took it
-export function letterText(items: readonly { event: HelmEvent; subs: string[] }[]): string {
-  const groups = new Map<string, string[]>();
-  for (const { event: e, subs } of items) {
-    const head = e.kind === 'work' || e.kind === 'decision' || e.kind === 'epic' ? e.kind : (e.repo ?? 'helm');
-    const lines = groups.get(head) ?? [];
-    lines.push(e.text);
-    for (const d of e.detail ?? []) lines.push(`  ${d}`);
-    lines.push(`  ${[e.url, subs.join(' ')].filter(Boolean).join(' · ')}`);
-    groups.set(head, lines);
-  }
-  return [...groups].map(([head, lines]) => [`[helm ${head}]`, ...lines].join('\n')).join('\n\n');
 }

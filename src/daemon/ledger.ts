@@ -1,9 +1,10 @@
 import type { ClaimBody, DecisionBody, QueueBody, RegisterBody, ReportBody, SubscribeBody } from '../core/protocol.ts';
+import { isOpen } from '../core/decision.ts';
 import { workKey } from '../core/protocol.ts';
-import type { AgentRecord, Answer, Decision, HelmEvent, Leftover, Letter, Phase, Session, SessionRole, Subscription, Work } from '../core/types.ts';
+import type { AgentRecord, Answer, Audience, Decision, HelmEvent, Leftover, Letter, Phase, RepoName, Session, SessionRole, Subscription, Work } from '../core/types.ts';
 
 // bumped when the stored shape changes; an older file is migrated or refused, never read as this one
-export const LEDGER_VERSION = 1;
+export const LEDGER_VERSION = 2;
 
 export type LedgerData = {
   version: number;
@@ -16,6 +17,16 @@ export type LedgerData = {
   // the newest events, for the web page's activity feed
   events: HelmEvent[];
 };
+
+// an older file brought up to this shape, in place
+export function migrate(data: LedgerData): LedgerData {
+  if (data.version === 1) {
+    // version 1 addressed nothing: every decision in it was in the person's inbox, and stays there
+    for (const d of Object.values(data.decisions)) d.to ??= 'person';
+    data.version = 2;
+  }
+  return data;
+}
 
 export const emptyLedger = (): LedgerData => ({
   version: LEDGER_VERSION,
@@ -54,6 +65,7 @@ export class Ledger {
   private readonly changed: () => void;
 
   constructor(data: LedgerData, now: () => number, changed: () => void = () => {}) {
+    migrate(data);
     if (data.version !== LEDGER_VERSION) throw new Error(`ledger version ${data.version} is not ${LEDGER_VERSION}`);
     this.data = data;
     this.now = now;
@@ -141,6 +153,25 @@ export class Ledger {
     this.data.subscriptions[id] = sub;
     this.changed();
     return sub;
+  }
+
+  // a subscription held back the settled ci of its pr's head
+  holdBack(id: string, sha: string): void {
+    const sub = this.data.subscriptions[id];
+    if (!sub || sub.held?.sha === sha) return;
+    sub.held = { sha };
+    this.changed();
+  }
+
+  // a poll's view of each held head: still the pr's head with ci settled is seen, anything else lets it go
+  reviewHeld(repo: RepoName, settledHead: (pr: number) => string | undefined): void {
+    for (const sub of Object.values(this.data.subscriptions)) {
+      if (sub.repo !== repo || !sub.held || sub.scope.kind !== 'pr') continue;
+      if (settledHead(sub.scope.number) !== sub.held.sha) delete sub.held;
+      else if (sub.held.seen) continue;
+      else sub.held.seen = true;
+      this.changed();
+    }
   }
 
   unsubscribe(id: string): boolean {
@@ -285,12 +316,15 @@ export class Ledger {
 
   decide(b: DecisionBody & { key?: string; condition?: string }): Decision {
     const now = this.now();
+    const to = this.audience(b);
     const d: Decision = {
       id: `d${++this.data.counters.decision}`,
       kind: b.kind,
       title: b.title,
       body: b.body,
       blocking: b.blocking,
+      to: to.to,
+      ...(to.session ? { session: to.session } : {}),
       state: 'open',
       createdAt: now,
       updatedAt: now,
@@ -304,6 +338,39 @@ export class Ledger {
     this.data.decisions[d.id] = d;
     this.changed();
     return d;
+  }
+
+  // an agent's question and a stall go to the session that owns the work, while it is live; everything else, and what
+  // such a session is not there to take, goes to the person
+  private audience(b: Pick<DecisionBody, 'kind' | 'repo' | 'issue' | 'from'>): { to: Audience; session?: string } {
+    if (!((b.kind === 'question' && b.from?.agent !== undefined) || b.kind === 'stall')) return { to: 'person' };
+    const owner = (b.repo && b.issue !== undefined ? this.data.work[workKey(b.repo, b.issue)]?.owner : undefined) ?? b.from?.session;
+    return owner && this.live(owner) ? { to: 'session', session: owner } : { to: 'person' };
+  }
+
+  // the session a decision is addressed to hands it on to the person
+  escalate(id: string, by: string, note?: string): Decision {
+    const d = this.data.decisions[id];
+    if (!d) throw new Error(`no decision ${id}`);
+    if (!isOpen(d)) throw new Error(d.state === 'open' ? `${id} is a record for review, not a decision` : `decision ${id} is already ${d.state}`);
+    if (d.to !== 'session') throw new Error(`decision ${id} is already the person's`);
+    this.toPerson(d, by, note);
+    return d;
+  }
+
+  // the open decisions addressed to a session that is gone, handed on to the person
+  orphaned(session: string): Decision[] {
+    const out = Object.values(this.data.decisions).filter((d) => isOpen(d) && d.to === 'session' && d.session === session);
+    for (const d of out) this.toPerson(d, 'helm', `session ${session} is gone`);
+    return out;
+  }
+
+  private toPerson(d: Decision, by: string, note?: string): void {
+    d.to = 'person';
+    delete d.session;
+    d.escalated = { by, at: this.now(), ...(note ? { note } : {}) };
+    d.updatedAt = this.now();
+    this.changed();
   }
 
   // a condition helmd watches: raised once while it holds, resolved once it no longer does. a person who dismissed or

@@ -2,3 +2,4 @@ node_modules/
 .claude-plugin/types/
 coverage/
 *.log
+.claude/worktrees/
