@@ -18,7 +18,7 @@ import { emptyLedger, Ledger, type LedgerData } from './ledger.ts';
 import { discover, type Git, git as realGit, scan } from './local.ts';
 import { readJson, Saver, writeJson } from './persist.ts';
 import { emptyCache, type RepoCache, RepoPoller } from './poller.ts';
-import { behindKey, ended, expired, type MatchContext } from './watch.ts';
+import { ended, heldKey, expired, type MatchContext } from './watch.ts';
 
 export type DaemonDeps = {
   paths: HelmPaths;
@@ -248,7 +248,7 @@ export class Daemon {
       delete st.error;
       st.lastPoll = this.now();
       if (changed) st.lastChange = st.lastPoll;
-      if (events.length) this.handle(repo, events, await this.staleHeads(repo, events));
+      if (events.length) this.handle(repo, events, await this.heldHeads(repo, events));
       if (changed) this.changed();
     } catch (error) {
       st.failures++;
@@ -305,7 +305,7 @@ export class Daemon {
   }
 
   // what an event means for the ledger beyond its delivery: finished work, and conditions raised or cleared
-  private handle(repo: RepoName, events: HelmEvent[], behind?: ReadonlySet<string>): void {
+  private handle(repo: RepoName, events: HelmEvent[], held?: ReadonlySet<string>): void {
     const forge = this.pollers.get(repo)?.forge;
     for (const e of events) {
       // an issue closed by its merged pr finished as merged, whichever of the two events comes first
@@ -333,7 +333,7 @@ export class Daemon {
         if (e.tags.includes('success')) this.ledger.resolveKey(key);
       }
     }
-    this.dispatch(events, behind ? { behind } : {});
+    this.dispatch(events, held ? { held } : {});
   }
 
   private prIssue(repo: RepoName, pr: number): { issue?: number } {
@@ -347,14 +347,14 @@ export class Daemon {
     return branch === def || branch === 'main' || branch === 'dev';
   }
 
-  private context(repo?: RepoName, behind?: ReadonlySet<string>): MatchContext {
+  private context(repo?: RepoName, held?: ReadonlySet<string>): MatchContext {
     const def = repo ? this.pollers.get(repo)?.forge?.defaultBranch : undefined;
-    return { protectedBranches: new Set(['main', 'dev', ...(def ? [def] : [])]), ...(behind ? { behind } : {}) };
+    return { protectedBranches: new Set(['main', 'dev', ...(def ? [def] : [])]), ...(held ? { held } : {}) };
   }
 
   // events to every subscription that takes them; to only the given ones for a catch-up, which the log already holds;
   // past one recipient a direct letter already reached
-  private dispatch(events: HelmEvent[], opts: { only?: Subscription[]; except?: Recipient; behind?: ReadonlySet<string> } = {}): void {
+  private dispatch(events: HelmEvent[], opts: { only?: Subscription[]; except?: Recipient; held?: ReadonlySet<string> } = {}): void {
     if (!events.length) return;
     if (!opts.only) this.ledger.record(events);
     const all = opts.only ?? Object.values(this.ledger.data.subscriptions);
@@ -364,7 +364,7 @@ export class Daemon {
     const byRepo = new Map<string, HelmEvent[]>();
     for (const e of events) byRepo.set(e.repo ?? '', [...(byRepo.get(e.repo ?? '') ?? []), e]);
     for (const [repo, batch] of byRepo) {
-      const { letters, retired } = route(batch, subs, this.context(repo || undefined, opts.behind), this.now());
+      const { letters, retired } = route(batch, subs, this.context(repo || undefined, opts.held), this.now());
       for (const l of letters) this.send(this.ledger.post(l));
       for (const id of retired) this.ledger.unsubscribe(id);
     }
@@ -549,8 +549,8 @@ export class Daemon {
     if (b.repo) await this.ask(b.repo).catch(() => undefined);
     const scope = b.scope;
     const pull = b.repo && scope.kind === 'pr' ? this.forgeOf(b.repo)?.pulls.find((p) => p.number === scope.number && p.state === 'open') : undefined;
-    const head = b.sha ?? (b.repo && pull && !pull.fork ? await this.pushedHead(b.repo, pull.head) : undefined);
-    const sub = this.ledger.subscribe({ ...b, ...(head ? { sha: head } : {}) });
+    const guess = !b.sha && b.repo && pull && !pull.fork ? await this.pushedHead(b.repo, pull.head) : undefined;
+    const sub = this.ledger.subscribe(b, guess);
     if (sub.repo && pull) await this.catchUp(sub, sub.repo, pull);
     return sub;
   }
@@ -561,7 +561,7 @@ export class Daemon {
     if (verdict !== 'success' && verdict !== 'failure') return;
     // right after a push the forge can still show the old head: its verdict is not the one the subscriber waits on,
     // and the live verdict comes once ci settles on the new head
-    if (sub.head && (await this.behind(repo, pull.sha, sub.head))) return;
+    if (await this.holds(repo, sub, pull.sha)) return;
     this.dispatch([verdictEvent(repo, pull, verdict, this.now())], { only: [sub] });
   }
 
@@ -577,26 +577,30 @@ export class Daemon {
     return best?.sha;
   }
 
-  // whether sha is strictly behind head: a different commit that head descends from. a missing object or any other
-  // answer is not behind, since a local guess can itself be the stale side
-  private async behind(repo: RepoName, sha: string, head: string): Promise<boolean> {
-    if (sameSha(sha, head)) return false;
+  // whether ci on sha is not the verdict a subscription waits on. a named head takes only itself and what descends
+  // from it, so a pre-rebase head is held back too. a guessed head holds back only what it strictly descends from:
+  // a missing object or any other answer delivers, since the guess can itself be the stale side
+  private async holds(repo: RepoName, sub: Subscription, sha: string): Promise<boolean> {
+    if (!sub.head || sameSha(sha, sub.head)) return false;
+    return sub.named ? !(await this.descends(repo, sha, sub.head)) : this.descends(repo, sub.head, sha);
+  }
+
+  // whether a checkout of the repository knows head to descend from base
+  private async descends(repo: RepoName, head: string, base: string): Promise<boolean> {
     for (const checkout of this.checkouts.get(repo) ?? []) {
-      if (await this.git(checkout, ['merge-base', '--is-ancestor', sha, head]).then(() => true, () => false)) return true;
+      if (await this.git(checkout, ['merge-base', '--is-ancestor', base, head]).then(() => true, () => false)) return true;
     }
     return false;
   }
 
-  // the ci events of a poll that are on a head some pr subscription has pushed past
-  private async staleHeads(repo: RepoName, events: HelmEvent[]): Promise<Set<string>> {
+  // the ci events of a poll that are on a head some pr subscription does not wait on
+  private async heldHeads(repo: RepoName, events: HelmEvent[]): Promise<Set<string>> {
     const out = new Set<string>();
-    const subs = Object.values(this.ledger.data.subscriptions).filter((s) => s.repo === repo && s.scope.kind === 'pr' && s.head);
+    const subs = Object.values(this.ledger.data.subscriptions).filter((s) => s.repo === repo && s.head);
     for (const e of events) {
       if (e.kind !== 'ci' || e.pr === undefined || !e.sha) continue;
       for (const s of subs) {
-        if (s.scope.kind !== 'pr' || s.scope.number !== e.pr) continue;
-        const key = behindKey(e.sha, s.head!);
-        if (!out.has(key) && (await this.behind(repo, e.sha, s.head!))) out.add(key);
+        if (s.scope.kind === 'pr' && s.scope.number === e.pr && (await this.holds(repo, s, e.sha))) out.add(heldKey(s.id, e.sha));
       }
     }
     return out;

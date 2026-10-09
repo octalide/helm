@@ -17,11 +17,11 @@ const ATTENTION: ReadonlySet<string> = new Set(['blocked', 'failing', 'stalled']
 export type MatchContext = {
   // branches a repo-scope subscription hears failed runs on: the default branch and the long-lived ones
   protectedBranches: ReadonlySet<string>;
-  // behindKey pairs whose sha is known to be strictly behind a subscription's expected head
-  behind?: ReadonlySet<string>;
+  // heldKey pairs of a subscription and a head whose ci is not its verdict
+  held?: ReadonlySet<string>;
 };
 
-export const behindKey = (sha: string, head: string): string => `${sha}..${head}`;
+export const heldKey = (sub: string, sha: string): string => `${sub}@${sha}`;
 
 export function globMatch(glob: string, text: string): boolean {
   const re = new RegExp(`^${glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`);
@@ -74,8 +74,8 @@ export function matches(e: HelmEvent, s: Subscription, ctx: MatchContext): boole
   if (!inScope(e, s)) return false;
   if (e.author?.bot && !s.bots) return false;
   if (e.kind === 'ci') {
-    // ci on a head the subscriber has pushed past speaks of code it no longer waits on
-    if (s.scope.kind === 'pr' && s.head && e.sha && ctx.behind?.has(behindKey(e.sha, s.head))) return false;
+    // ci on a head other than the one the subscriber waits on speaks of code it no longer waits on
+    if (e.sha && ctx.held?.has(heldKey(s.id, e.sha))) return false;
     return ciTaken(e, s, ctx);
   }
   const tags = s.tags ?? DEFAULT_ITEM_TAGS[s.scope.kind] ?? [];

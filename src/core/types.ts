@@ -324,8 +324,10 @@ export type Subscription = {
   tags?: string[];
   bots: boolean;
   until?: Until;
-  // a pr subscription's expected head: ci on a head strictly behind it is not its verdict
+  // a pr subscription's expected head. named by the caller, ci on a head that is neither it nor past it is not its
+  // verdict; guessed from the local checkout, which can itself be stale, only ci on a head strictly behind it is not
   head?: string;
+  named?: boolean;
   session: string;
   agent?: string;
   createdAt: number;

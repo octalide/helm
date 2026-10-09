@@ -8,7 +8,7 @@ import type { GitHub } from '../src/daemon/github.ts';
 import { Daemon } from '../src/daemon/helmd.ts';
 import type { Git } from '../src/daemon/local.ts';
 import { emptyCache } from '../src/daemon/poller.ts';
-import { behindKey } from '../src/daemon/watch.ts';
+import { heldKey } from '../src/daemon/watch.ts';
 import type { HelmEvent } from '../src/core/types.ts';
 import { check, forge, pull, T0 } from './fixtures.ts';
 
@@ -82,10 +82,10 @@ describe('daemon', () => {
     await d.stop();
   });
 
-  it('holds back ci on a head the subscriber has pushed past, and only that', async () => {
-    // history runs stale -> old -> pushed, and other shares none of it
-    const [stale, old, pushed, other] = ['b', 'a', 'c', 'd'].map((c) => c.repeat(40)) as [string, string, string, string];
-    const history = [stale, old, pushed];
+  it('holds back ci on a head other than the one the subscriber waits on', async () => {
+    // history runs stale -> old -> pushed -> later, and rebased shares none of it
+    const [stale, old, pushed, later, rebased] = ['b', 'a', 'c', 'e', 'd'].map((c) => c.repeat(40)) as [string, string, string, string, string];
+    const history = [stale, old, pushed, later];
     const offline = { rates: {}, conditional: async () => Promise.reject(new Error('offline')) } as unknown as GitHub;
     let remote = pushed;
     const git: Git = async (_cwd, args) => {
@@ -113,24 +113,32 @@ describe('daemon', () => {
     const caught = (agent: string) => lettersFor(d, 'A', agent).some((l) => l.text.includes('ci settled success'));
 
     // the forge still shows old, the push made pushed: held back, from the local ref or a named sha
-    expect((await wait('behind')).head).toBe(pushed);
-    await wait('named', pushed.slice(0, 7));
+    const guessed = await wait('guessed');
+    expect([guessed.head, guessed.named]).toEqual([pushed, undefined]);
+    const named = await wait('named', pushed.slice(0, 7));
+    expect([named.head, named.named]).toEqual([pushed.slice(0, 7), true]);
+    // a force push: the forge's pre-rebase head is no part of the named one
+    const forced = await wait('force pushed', rebased);
     // a fork's origin/<head> is some other branch: no guess
     expect((await wait('fork', undefined, 151)).head).toBeUndefined();
-    await wait('wins', old.slice(0, 7));
+    await wait('matches', old.slice(0, 7));
+    // the forge head is past the named one: pushed on top since
+    await wait('pushed on top', stale);
     remote = old;
     await wait('caught');
     // a local ref fetched long ago, or one the forge head does not descend from, says nothing
     remote = stale;
     await wait('fetched long ago');
-    remote = other;
+    remote = rebased;
     await wait('unrelated');
-    expect(Object.fromEntries(['behind', 'named', 'fork', 'wins', 'caught', 'fetched long ago', 'unrelated'].map((a) => [a, caught(a)]))).toEqual({ behind: false, named: false, fork: true, wins: true, caught: true, 'fetched long ago': true, unrelated: true });
+    const agents = ['guessed', 'named', 'force pushed', 'fork', 'matches', 'pushed on top', 'caught', 'fetched long ago', 'unrelated'];
+    expect(agents.filter(caught)).toEqual(['fork', 'matches', 'pushed on top', 'caught', 'fetched long ago', 'unrelated']);
 
-    // live: ci on a head behind the expected one is held back, on that head or past it it goes through
+    // live: a guessed head holds back only what it strictly descends from, a named one all but itself and what follows
     const live = (sha: string) => ({ id: `ci:${sha}`, kind: 'ci' as const, repo: 'o/r', at: T0, pr: 150, sha, tags: ['settled', 'success'], text: `ci settled success @${sha.slice(0, 7)}` });
-    const held = (await (d as unknown as { staleHeads: (r: string, e: HelmEvent[]) => Promise<Set<string>> }).staleHeads('o/r', [live(old), live(pushed), live(other)]));
-    expect([...held]).toEqual([behindKey(old, pushed), behindKey(old, pushed.slice(0, 7))]);
+    const held = await (d as unknown as { heldHeads: (r: string, e: HelmEvent[]) => Promise<Set<string>> }).heldHeads('o/r', [old, pushed, later, rebased].map(live));
+    const of = (id: string) => [old, pushed, later, rebased].filter((sha) => held.has(heldKey(id, sha)));
+    expect([of(guessed.id), of(named.id), of(forced.id)]).toEqual([[old], [old, rebased], [old, pushed, later]]);
     await d.stop();
   });
 
