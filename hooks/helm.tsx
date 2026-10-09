@@ -243,8 +243,8 @@ export const register: Register = (on) => {
     const out = await next(e);
     const r = rt;
     if (!r?.alive || out.deny !== undefined) return out;
-    const texts = await r.mailbox.attach(e.agentId).catch(() => []);
-    return texts.length ? { ...out, context: [...(out.context ?? []), ...texts] } : out;
+    const text = await r.mailbox.attach(e.agentId).catch(() => undefined);
+    return text === undefined ? out : { ...out, context: [...(out.context ?? []), text] };
   }).catch(($, e, next) => next(e));
 
   on('session.start', async ($, e, next) => {
@@ -271,7 +271,7 @@ export const register: Register = (on) => {
       mailbox: new Mailbox({
         now: Date.now,
         take: (id) => client.take(id),
-        submit: async (text) => void (await $.prompt.submit({ text })),
+        submit: async (text) => (await $.prompt.submit({ text })).drop === undefined,
         send: async (agent, text) => {
           const sent = await $.session.send({ to: { agentId: agent }, text });
           return sent.isDelivered ? undefined : sent.reason;
