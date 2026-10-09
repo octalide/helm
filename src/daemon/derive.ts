@@ -1,6 +1,6 @@
 import { verdictOf } from '../core/checks.ts';
 import { isOpen } from '../core/decision.ts';
-import { selfWorked } from '../core/work.ts';
+import { inherited, selfWorked } from '../core/work.ts';
 import type { AgentStatus, Decision, ForgeState, Issue, Job, LocalState, Phase, Pull, Session, Subscription, Work, WorkView } from '../core/types.ts';
 
 // the branch conventions an issue's work goes on: feat/12, fix/12, hotfix/12, or any prefix ending in the number
@@ -22,7 +22,8 @@ const CLAIM_GRACE_MS = 90_000;
 export function agentStatusOf(w: Work, sessions: ReadonlyMap<string, Session>, now: number): AgentStatus | undefined {
   if (!w.agent) return undefined;
   const owner = w.owner ? sessions.get(w.owner) : undefined;
-  if (!owner || owner.gone) return 'gone';
+  // an agent adopted work came with is gone with the session that ran it
+  if (!owner || owner.gone || inherited(w)) return 'gone';
   const listed = owner.agents.find((a) => a.id === w.agent)?.status;
   if (listed) return listed;
   return w.claimedAt !== undefined && now - w.claimedAt < CLAIM_GRACE_MS ? 'running' : 'gone';
@@ -51,7 +52,8 @@ export function phaseOf(w: Work, ctx: { pull?: Pull; agent?: AgentStatus; ownerL
   // and so is a live session working it itself
   const self = selfWorked(w);
   const live = ctx.agent !== undefined && LIVE.has(ctx.agent) && !(ctx.stuck && RESTING.has(ctx.agent));
-  const active = live || (w.report?.state === 'waiting' && !ctx.stuck) || (self && ctx.ownerLive === true);
+  // an agent that came with adopted work is gone with its session, so what it waited on reaches it no more
+  const active = live || (w.report?.state === 'waiting' && !ctx.stuck && !inherited(w)) || (self && ctx.ownerLive === true);
   // set aside with nobody on it is waiting on purpose, not stalled; someone still on it shows where it stands
   if (ctx.setAside && !active) return 'parked';
   if (ctx.stuck && !active) return 'stalled';
