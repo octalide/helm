@@ -47,6 +47,9 @@ const DISCOVER_MS = 10 * 60_000;
 const RATE_FLOOR = 150;
 const LOG_TAIL = 200;
 
+// one letter's addressee: a session's main loop, or one agent of it
+type Recipient = { session: string; agent?: string };
+
 export class Daemon {
   readonly startedAt: number;
   readonly version: string;
@@ -276,11 +279,14 @@ export class Daemon {
     return { protectedBranches: new Set(['main', 'dev', ...(def ? [def] : [])]) };
   }
 
-  // events to every subscription that takes them; to only the given ones for a catch-up, which the log already holds
-  private dispatch(events: HelmEvent[], only?: Subscription[]): void {
+  // events to every subscription that takes them; to only the given ones for a catch-up, which the log already holds;
+  // past one recipient a direct letter already reached
+  private dispatch(events: HelmEvent[], opts: { only?: Subscription[]; except?: Recipient } = {}): void {
     if (!events.length) return;
-    if (!only) this.ledger.record(events);
-    const subs = only ?? Object.values(this.ledger.data.subscriptions);
+    if (!opts.only) this.ledger.record(events);
+    const all = opts.only ?? Object.values(this.ledger.data.subscriptions);
+    const except = opts.except;
+    const subs = except ? all.filter((s) => !(s.session === except.session && (s.agent ?? '') === (except.agent ?? ''))) : all;
     // events of different repositories match against different protected branches
     const byRepo = new Map<string, HelmEvent[]>();
     for (const e of events) byRepo.set(e.repo ?? '', [...(byRepo.get(e.repo ?? '') ?? []), e]);
@@ -477,7 +483,7 @@ export class Daemon {
     const pull = this.forgeOf(repo)?.pulls.find((p) => p.number === number && p.state === 'open');
     const verdict = pull ? verdictOf(pull.checks) : 'none';
     if (!pull || (verdict !== 'success' && verdict !== 'failure')) return;
-    this.dispatch([verdictEvent(repo, pull, verdict, this.now())], [sub]);
+    this.dispatch([verdictEvent(repo, pull, verdict, this.now())], { only: [sub] });
   }
 
   queue(b: QueueBody): ReturnType<Ledger['queue']> {
@@ -538,18 +544,18 @@ export class Daemon {
     const live = recipient && this.ledger.live(recipient.session);
     if (recipient && live) this.send(this.ledger.post({ session: recipient.session, ...(recipient.agent ? { agent: recipient.agent } : {}), text: lines.join('\n'), events: [], subs: [] }));
     const owner = recipient?.session;
-    this.dispatch([
-      {
-        id: `decision:${d.id}:answered@${this.now()}`,
-        kind: 'decision',
-        ...(d.repo ? { repo: d.repo } : {}),
-        ...(d.issue !== undefined ? { issue: d.issue } : {}),
-        at: this.now(),
-        tags: ['answered'],
-        text: `decision ${d.id} answered by ${b.by}: ${d.title}${b.option ? ` → ${b.option}` : ''}`,
-        ...(owner ? { owner } : {}),
-      },
-    ]);
+    const event: HelmEvent = {
+      id: `decision:${d.id}:answered@${this.now()}`,
+      kind: 'decision',
+      ...(d.repo ? { repo: d.repo } : {}),
+      ...(d.issue !== undefined ? { issue: d.issue } : {}),
+      at: this.now(),
+      tags: ['answered'],
+      text: `decision ${d.id} answered by ${b.by}: ${d.title}${b.option ? ` → ${b.option}` : ''}`,
+      ...(owner ? { owner } : {}),
+    };
+    // the recipient has the answer already; the event is for everyone else watching
+    this.dispatch([event], live && recipient ? { except: recipient } : {});
     return { decision: d, delivered: Boolean(live) };
   }
 
