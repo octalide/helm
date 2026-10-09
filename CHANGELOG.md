@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0
+
+Every session needs `/reload-plugins` once: the protocol moves to 2.
+
+- Every decision says who it is for. Your inbox and its badge count only what is yours. What agents ask their sessions shows below it under "for sessions", muted and never counted. A session answers its agents' questions, or escalates one to you. A gone session's decisions pass to you. Choices and routing picks are records, in a new Review view (#53).
+- Deliveries to a busy main loop ride its tool results again, and letters that wait for a turn end go as one prompt, with a work item's stale phases folded into its newest. The cause was a module copy left running by a plugin reload: it took every letter and submitted each as its own prompt. A replaced copy now stands down (#58).
+- A CI wait settles only on the head it waits on. `watch` takes the `sha` you pushed, and a verdict for an older head, or for a head from before a force push, is held back. Without a `sha`, the branch's pushed head is guessed and only a head strictly behind it is held (#55).
+- When an issue agent ends, processes it left running in its worktree are reported on the work item and to its owner. helm never kills them. The issue prompt forbids shell backgrounding and wait loops (#61).
+- A session's mod never replaces a newer helmd. One that speaks a newer protocol is logged as needing `/reload-plugins`. helmd creates its own lock directory (#69).
+- Work dispatched before helm polled its issue carries the issue's title (#60).
+
 ## 0.3.0
 
 - Issue agents can be resumed again. helm's guard against the model starting an issue agent directly moved from `agent.offer`, which the engine also asks on a resume, to `agent.spawn`. Before, every issue agent that ended its turn to wait on CI or an answer was unreachable. A session also registers the agent type of every work item it owns, so an agent on a tier since removed keeps its type (#45).

@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { extname, join } from 'node:path';
-import type { AnswerBody, ClaimBody, DecisionBody, Health, HeartbeatBody, OrderBody, QueueBody, RegisterBody, ReleaseBody, ReportBody, RoleBody, StreamFrame, SubscribeBody } from '../core/protocol.ts';
+import type { AnswerBody, ClaimBody, DecisionBody, EscalateBody, Health, HeartbeatBody, OrderBody, QueueBody, RegisterBody, ReleaseBody, ReportBody, RoleBody, StreamFrame, SubscribeBody } from '../core/protocol.ts';
 import { PROTOCOL } from '../core/protocol.ts';
 import type { Daemon } from './helmd.ts';
 import { ClaimError } from './ledger.ts';
@@ -76,7 +76,7 @@ export function routes(d: Daemon, stop: () => void): Route[] {
       return s;
     }),
     compile('POST', '/v1/sessions/:id/end', ({ params }) => {
-      d.ledger.endSession(params.id!);
+      d.endSession(params.id!);
       return { ended: true };
     }),
     compile('GET', '/v1/sessions/:id/stream', ({ params, req, res }) => {
@@ -153,6 +153,19 @@ export function routes(d: Daemon, stop: () => void): Route[] {
         need(b && (b.text || b.option), 'text or option is required');
         try {
           return d.answer(params.id!, { text: b.text ?? '', ...(b.option ? { option: b.option } : {}), by: b.by || 'human' });
+        } catch (e) {
+          throw new HttpError(409, (e as Error).message);
+        }
+      },
+      true,
+    ),
+    compile(
+      'POST',
+      '/v1/decisions/:id/escalate',
+      async ({ params, body }) => {
+        const b = ((await body()) ?? {}) as EscalateBody;
+        try {
+          return d.escalate(params.id!, { by: b.by || 'human', ...(b.note ? { note: b.note } : {}) });
         } catch (e) {
           throw new HttpError(409, (e as Error).message);
         }

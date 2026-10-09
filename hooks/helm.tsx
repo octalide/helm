@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code';
 import type { EngineInterface, Register } from 'claude-code';
 import { helmPaths, type PathEnv } from '../src/core/paths.ts';
-import { PROTOCOL, type StreamFrame } from '../src/core/protocol.ts';
-import { compareVersions, isRepoName, repoOfRemote } from '../src/core/repo.ts';
+import { daemonAction, PROTOCOL, type StreamFrame } from '../src/core/protocol.ts';
+import { isRepoName, repoOfRemote } from '../src/core/repo.ts';
 import type { AgentRecord, AgentStatus, Effort, Fleet, RepoName, SessionRole } from '../src/core/types.ts';
 import { HelmClient, HelmError } from '../src/mod/client.ts';
 import { type DispatchPort, dispatchTool, issueAgentName } from '../src/mod/dispatch.ts';
@@ -36,6 +36,10 @@ function rolePrompt(r: Runtime): string | undefined {
 
 const fleetAt = atom({ plugin: 'helm', key: 'fleetAt' } as const, 0);
 const paneTab = atom({ plugin: 'helm', key: 'paneTab' } as const, 'work' as Tab);
+// the module instance that holds the session's binding. a reload swaps the hooks but can leave the replaced
+// instance's stream running, its mailbox deaf to turns, so each instance stamps itself here at session.start and
+// one that finds another stamp stands down
+const binder = atom({ plugin: 'helm', key: 'binder' } as const, '');
 let fleet: Fleet | undefined;
 
 let rt: Runtime | undefined;
@@ -66,11 +70,18 @@ function daemonArgv($: $, cmd: string, ...rest: string[]): string[] {
   return ['node', '--disable-warning=ExperimentalWarning', `${$.plugin.root}/src/daemon/main.ts`, cmd, ...rest];
 }
 
+let reloadSaid = false;
+
 // helmd answering at this mod's version or newer; an older one is replaced, a newer one is used as it is
 async function ensureDaemon($: $, client: HelmClient, version: string): Promise<void> {
   const up = await client.health().catch(() => undefined);
-  if (up && up.protocol === PROTOCOL && compareVersions(up.version, version) >= 0) return;
-  const cmd = up ? 'restart' : 'start';
+  const cmd = daemonAction(up, version);
+  if (cmd === 'use') return;
+  if (cmd === 'reload') {
+    if (!reloadSaid) $.ui.log(`helm: helmd ${up?.version} speaks protocol ${up?.protocol}, newer than this session's mod (${PROTOCOL}): run /reload-plugins`);
+    reloadSaid = true;
+    return;
+  }
   const r = await $.process.run(daemonArgv($, cmd), { timeoutMs: 30_000 });
   if (r.exitCode !== 0) throw new Error(`helmd ${cmd} failed: ${(r.stderr || r.stdout).trim()}`);
 }
@@ -141,13 +152,26 @@ function port($: $): Port {
   };
 }
 
+// false once a later instance of this module holds the binding, which this one learns of here and stands down for:
+// its timers and mailbox stop, and the stream it reads ends. a stamp that cannot be read is another's
+async function holds($: $, r: Runtime): Promise<boolean> {
+  if (!r.alive) return false;
+  const stamp = await read($, binder).catch(() => undefined);
+  if (stamp === '' || stamp === r.instance) return true;
+  r.alive = false;
+  r.timers.forEach((t) => t.cancel());
+  r.mailbox.stop();
+  $.ui.log(`helm: instance ${r.instance} stood down for ${stamp ?? 'an unreadable binding'}`, { to: 'debug' });
+  return false;
+}
+
 // letters and change notices from helmd, for the life of this module; reconnects whenever helmd goes away
 function pump($: $, r: Runtime): void {
   const run = async () => {
     try {
       let buf = '';
       for await (const piece of $.process.spawn({ argv: daemonArgv($, 'stream', r.session) })) {
-        if (!r.alive) break;
+        if (!(await holds($, r))) break;
         if (piece.stream !== 'stdout') continue;
         buf += piece.text;
         for (let i = buf.indexOf('\n'); i >= 0; i = buf.indexOf('\n')) {
@@ -159,7 +183,7 @@ function pump($: $, r: Runtime): void {
     } catch (e) {
       $.ui.log(`helm: stream ended: ${(e as Error).message}`, { to: 'debug' });
     }
-    if (!r.alive) return;
+    if (!(await holds($, r))) return;
     r.timers.push(
       $.clock.after(RECONNECT_MS, () => {
         void ensureDaemon($, r.client, r.version)
@@ -243,8 +267,8 @@ export const register: Register = (on) => {
     const out = await next(e);
     const r = rt;
     if (!r?.alive || out.deny !== undefined) return out;
-    const texts = await r.mailbox.attach(e.agentId).catch(() => []);
-    return texts.length ? { ...out, context: [...(out.context ?? []), ...texts] } : out;
+    const text = await r.mailbox.attach(e.agentId).catch(() => undefined);
+    return text === undefined ? out : { ...out, context: [...(out.context ?? []), text] };
   }).catch(($, e, next) => next(e));
 
   on('session.start', async ($, e, next) => {
@@ -265,13 +289,14 @@ export const register: Register = (on) => {
       home: (await $.env.get('HOME')) ?? '',
       session: await $.session.id(),
       role: asked && ROLES.includes(asked) ? asked : repo ? 'repo' : 'other',
+      instance: crypto.randomUUID(),
       alive: true,
       timers: [],
       ...(repo ? { repo } : {}),
       mailbox: new Mailbox({
         now: Date.now,
         take: (id) => client.take(id),
-        submit: async (text) => void (await $.prompt.submit({ text })),
+        submit: async (text) => (await $.prompt.submit({ text })).drop === undefined,
         send: async (agent, text) => {
           const sent = await $.session.send({ to: { agentId: agent }, text });
           return sent.isDelivered ? undefined : sent.reason;
@@ -283,6 +308,7 @@ export const register: Register = (on) => {
       }),
     };
     rt = r;
+    await update($, binder, () => r.instance);
 
     for (const t of tools) await $.tool.register({ name: t.name, description: t.description, inputSchema: t.inputSchema, isDeferred: !t.eager });
     await $.command.register({ name: PLUGIN, description: 'helm: status, role, web page' });
@@ -300,7 +326,7 @@ export const register: Register = (on) => {
     r.timers.push(
       $.clock.every(HEARTBEAT_MS, () => {
         void (async () => {
-          if (!r.alive) return;
+          if (!(await holds($, r))) return;
           await r.client.heartbeat(r.session, await agentRecords($)).catch(async (err: unknown) => {
             if (err instanceof HelmError && err.status === 404) await bind($, r);
           });
@@ -315,7 +341,8 @@ export const register: Register = (on) => {
     const r = rt;
     if (!r) return out;
     if (e.reason === 'clear' || e.reason === 'resume') {
-      // the process goes on under another session id, with no session.start
+      // the process goes on under another session id, with no session.start, and this instance keeps the binding
+      await update($, binder, () => r.instance).catch(() => {});
       r.timers.push($.clock.after(500, () => void bind($, r).catch(() => {})));
       return out;
     }
@@ -378,7 +405,7 @@ export const register: Register = (on) => {
     return rowsOf($, e, paneRows(f, selfOf(r), { rows: Math.max(6, (e.viewport?.rows ?? 24) - 2), cols: e.viewport?.columns ?? 80, tab, ...(r.web ? { web: r.web } : {}) }));
   });
 
-  // the pane's controls: a tab, an option that answers a decision, or a dismissal
+  // the pane's controls: a tab, an option that answers a decision, an escalation to the person, or a dismissal
   on('ui.press', async ($, e, next) => {
     if (e.requestId !== PANE) return next(e);
     const r = rt;
@@ -388,6 +415,7 @@ export const register: Register = (on) => {
       const option = fleet?.decisions.find((d) => d.id === id)?.options?.[Number(index)];
       if (option) await r.client.answer(id, { text: '', option, by: 'pane' }).then(() => refresh($, r), (err: Error) => $.ui.log(`helm: answer failed: ${err.message}`, { to: 'debug' }));
     }
+    if (r && id && kind === 'escalate') await r.client.escalate(id, { by: 'pane' }).then(() => refresh($, r), (err: Error) => $.ui.log(`helm: escalate failed: ${err.message}`, { to: 'debug' }));
     if (r && id && kind === 'dismiss') await r.client.dismiss(id).then(() => refresh($, r), (err: Error) => $.ui.log(`helm: dismiss failed: ${err.message}`, { to: 'debug' }));
     return next(e);
   }).catch(($, e, next) => next(e));

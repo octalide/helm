@@ -1,4 +1,5 @@
 import { verdictOf } from '../core/checks.ts';
+import { isOpen } from '../core/decision.ts';
 import { selfWorked } from '../core/work.ts';
 import type { AgentStatus, Decision, ForgeState, Issue, Job, LocalState, Phase, Pull, Session, Work, WorkView } from '../core/types.ts';
 
@@ -67,7 +68,7 @@ export function viewOf(
 ): WorkView {
   const pull = forge ? pullFor(w.issue, forge.pulls) : undefined;
   const issue = forge?.issues.find((i) => i.number === w.issue);
-  const mine = decisions.filter((d) => d.repo === w.repo && d.issue === w.issue && d.state === 'open');
+  const mine = decisions.filter((d) => d.repo === w.repo && d.issue === w.issue && isOpen(d));
   const agentStatus = agentStatusOf(w, sessions, now);
   const checks = pull?.state === 'open' ? pull.checks : [];
   const runs = new Set(checks.map((c) => c.run).filter((r): r is number => r !== undefined));

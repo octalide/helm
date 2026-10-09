@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { route } from '../src/daemon/deliver.ts';
-import { ended, globMatch, matches, retiredBy } from '../src/daemon/watch.ts';
+import { ended, heldKey, globMatch, matches, retiredBy } from '../src/daemon/watch.ts';
 import { forge, issue, pull } from './fixtures.ts';
 import type { HelmEvent, Subscription } from '../src/core/types.ts';
 
@@ -30,6 +30,15 @@ describe('matches', () => {
     const e = ev({ kind: 'ci', pr: 1, tags: ['settled', 'success'] });
     expect(matches(e, s, ctx)).toBe(true);
     expect(retiredBy(e, s)).toBe(true);
+  });
+
+  it('holds back ci on a head the daemon found a subscription does not wait on', () => {
+    const s = sub({ scope: { kind: 'pr', number: 1 }, ci: 'settled', until: 'settled', head: 'c'.repeat(40) });
+    const on = (sha: string) => ev({ kind: 'ci', pr: 1, sha, tags: ['settled', 'success'] });
+    const held = { ...ctx, held: new Set([heldKey('s1', 'a'.repeat(40))]) };
+    expect(matches(on('a'.repeat(40)), s, held)).toBe(false);
+    expect(matches(on('c'.repeat(40)), s, held)).toBe(true);
+    expect(matches(on('a'.repeat(40)), sub({ id: 's2', scope: { kind: 'pr', number: 1 }, ci: 'settled' }), held)).toBe(true);
   });
 
   it('hears failed runs on a whole repository only on long-lived branches', () => {
@@ -68,6 +77,12 @@ describe('route', () => {
     ]);
     expect(letters[1]?.text.split('\n')[0]).toBe('[helm o/r]');
     expect(retired).toEqual(['s2']);
+  });
+
+  it('folds a work item\'s phases in one batch into one line', () => {
+    const work = (from: 'new' | 'working', to: 'working' | 'draft') => ev({ id: to, kind: 'work', issue: 1, tags: ['phase', to], text: '', url: 'u', owner: 'S', phase: { from, to, title: 't' } });
+    const { letters } = route([work('new', 'working'), work('working', 'draft')], [sub({ scope: { kind: 'work' } })], ctx, 0);
+    expect(letters[0]?.text).toBe('[helm work]\no/r#1 new → working → draft: t\n  u · s1');
   });
 });
 

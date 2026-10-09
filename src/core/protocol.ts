@@ -1,9 +1,19 @@
+import { compareVersions } from './repo.ts';
 import type { AgentRecord, CiFilter, Decision, DecisionKind, Effort, Letter, PlanStep, ReportState, RepoName, Routing, Scope, SessionRole, Tier, Until } from './types.ts';
 
 // bumped when a route or a body changes shape; a mod that finds an older daemon replaces it
-export const PROTOCOL = 1;
+export const PROTOCOL = 2;
 
 export type Health = { version: string; protocol: number; pid: number; startedAt: number; web?: string };
+
+// what a mod does about the helmd it finds: start one, replace an older one, use one as new or newer, or, when that one
+// speaks a newer protocol, wait for this session to reload onto a mod that speaks it. a newer helmd is never replaced
+export function daemonAction(up: Pick<Health, 'version' | 'protocol'> | undefined, version: string, protocol = PROTOCOL): 'start' | 'restart' | 'use' | 'reload' {
+  if (!up) return 'start';
+  if (up.protocol > protocol) return 'reload';
+  if (up.protocol < protocol || compareVersions(up.version, version) < 0) return 'restart';
+  return 'use';
+}
 
 export type RegisterBody = { id: string; cwd: string; role?: SessionRole; repo?: RepoName; title?: string };
 
@@ -18,13 +28,16 @@ export type SubscribeBody = {
   tags?: string[];
   bots?: boolean;
   until?: Until;
+  // a pr subscription's head as the caller pushed it: ci on a head strictly behind it is not delivered
+  sha?: string;
   session: string;
   agent?: string;
 };
 
 export type QueueBody = { session: string; repo: RepoName; issues: number[] };
 
-export type ClaimBody = { session: string; repo: RepoName; issue: number; agent?: string; routing?: Routing; force?: boolean };
+// title: what the caller read of the issue, for when the forge cache has not seen it yet
+export type ClaimBody = { session: string; repo: RepoName; issue: number; title?: string; agent?: string; routing?: Routing; force?: boolean };
 
 export type ReportBody = {
   session: string;
@@ -35,7 +48,7 @@ export type ReportBody = {
   note?: string;
   // a question that stops the agent until answered
   question?: { title: string; body: string; options?: string[] };
-  // choices made without the person, logged for review
+  // choices made without the person, recorded for review
   choices?: { title: string; body: string }[];
   // the plan as it stands, every step with whether it is done
   plan?: PlanStep[];
@@ -57,6 +70,8 @@ export type DecisionBody = {
 };
 
 export type AnswerBody = { text: string; option?: string; by: string };
+
+export type EscalateBody = { by: string; note?: string };
 
 export type RoutingConfig = { judge: string; review: number; tiers: Tier[]; fallback: string };
 

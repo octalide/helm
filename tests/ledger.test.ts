@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { hasWorker } from '../src/core/work.ts';
 import { phaseOf, viewOf } from '../src/daemon/derive.ts';
-import { ClaimError, emptyLedger, Ledger } from '../src/daemon/ledger.ts';
+import { isOpen } from '../src/core/decision.ts';
+import type { Decision } from '../src/core/types.ts';
+import { ClaimError, emptyLedger, Ledger, type LedgerData } from '../src/daemon/ledger.ts';
 import { check, forge, issue, pull, T0 } from './fixtures.ts';
 
 const ledger = () => {
@@ -65,6 +67,52 @@ describe('ledger', () => {
     expect(decisions[0]?.blocking).toBe(true);
     l.report({ session: 'A', agent: 'x', repo: 'o/r', issue: 1, state: 'working' });
     expect(l.data.decisions[decisions[0]!.id]?.state).toBe('resolved');
+  });
+
+  it('addresses an agent question and a stall to the live owner, everything else to the person, and keeps records out of the open', () => {
+    const { l } = ledger();
+    l.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    l.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'x' }, 'one');
+    const to = (d: Decision) => [d.kind, d.to, d.session];
+    const stall = (issue: number) => ({ kind: 'stall' as const, repo: 'o/r', issue, title: 's', body: '', blocking: false });
+    const asked = l.report({ session: 'A', agent: 'x', repo: 'o/r', issue: 1, state: 'blocked', question: { title: 'q', body: '' }, choices: [{ title: 'c', body: '' }] }).decisions;
+    expect(asked.map(to)).toEqual([['question', 'session', 'A'], ['choice', 'person', undefined]]);
+    expect(asked.map(isOpen)).toEqual([true, false]);
+    expect(to(l.report({ session: 'A', repo: 'o/r', issue: 1, state: 'blocked', question: { title: 'mine', body: '' } }).decisions[0]!)).toEqual(['question', 'person', undefined]);
+    const routing = l.decide({ kind: 'routing', repo: 'o/r', issue: 1, title: 'r', body: '', blocking: false, from: { session: 'A' } });
+    expect([to(routing), isOpen(routing)]).toEqual([['routing', 'person', undefined], false]);
+    expect(to(l.raise('stall:work:o/r#1', 'c', stall(1))!)).toEqual(['stall', 'session', 'A']);
+    expect(to(l.raise('stall:work:o/r#9', 'c', stall(9))!)).toEqual(['stall', 'person', undefined]);
+    expect(to(l.decide({ kind: 'failure', repo: 'o/r', title: 'f', body: '', blocking: false }))).toEqual(['failure', 'person', undefined]);
+  });
+
+  it('escalates a session\'s decision to the person once, and never a record', () => {
+    const { l } = ledger();
+    l.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    l.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'x' }, 'one');
+    const [q, c] = l.report({ session: 'A', agent: 'x', repo: 'o/r', issue: 1, state: 'blocked', question: { title: 'q', body: '' }, choices: [{ title: 'c', body: '' }] }).decisions;
+    expect(l.escalate(q!.id, 'session A', 'not mine to call')).toMatchObject({ to: 'person', state: 'open', escalated: { by: 'session A', note: 'not mine to call', at: T0 } });
+    expect(q!.session).toBeUndefined();
+    expect(() => l.escalate(q!.id, 'session A')).toThrow(/already the person's/);
+    expect(() => l.escalate(c!.id, 'session A')).toThrow(/record/);
+  });
+
+  it('hands what a gone session held to the person, and addresses nothing new to it', () => {
+    const { l, tick } = ledger();
+    l.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    l.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'x' }, 'one');
+    const q = l.report({ session: 'A', agent: 'x', repo: 'o/r', issue: 1, state: 'blocked', question: { title: 'q', body: '' } }).decisions[0]!;
+    tick(200_000);
+    l.sweep(120_000);
+    expect(l.orphaned('A').map((d) => d.id)).toEqual([q.id]);
+    expect([q.to, q.session, q.escalated?.by]).toEqual(['person', undefined, 'helm']);
+    expect(l.raise('stall:work:o/r#1', 'c', { kind: 'stall', repo: 'o/r', issue: 1, title: 's', body: '', blocking: false })!.to).toBe('person');
+  });
+
+  it('reads a version 1 ledger, leaving its decisions with the person', () => {
+    const old = { ...emptyLedger(), version: 1, decisions: { d1: { id: 'd1', kind: 'question', title: 'q', body: '', blocking: true, state: 'open', createdAt: T0, updatedAt: T0 } } } as unknown as LedgerData;
+    const l = new Ledger(old, () => T0);
+    expect([l.data.version, l.data.decisions.d1!.to]).toEqual([2, 'person']);
   });
 
   it('holds a dismissed condition until it changes or ends, then raises it again', () => {
