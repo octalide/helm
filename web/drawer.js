@@ -56,6 +56,9 @@ export function renderDrawer() {
     decisions.length
       ? el('section', { class: 'dsec' }, el('h3', {}, 'Decisions'), el('div', { class: 'list' }, decisions.map((d) => el('div', { class: 'row' }, el('span', { class: 'chip kind' }, d.kind), el('span', { class: 'grow' }, d.title, d.answer ? el('div', { class: 'dim' }, `→ ${d.answer.option ? `${d.answer.option} ` : ''}${d.answer.text}`) : ''), el('a', { class: 'dim', href: isRecord(d) ? '#/review' : '#/inbox' }, isRecord(d) && d.state === 'dismissed' ? 'reviewed' : d.state)))))
       : '',
+    w.leftovers?.length
+      ? el('section', { class: 'dsec' }, el('h3', {}, 'Left running', el('small', {}, 'when its agent ended; helm kills nothing')), el('ul', { class: 'checks' }, w.leftovers.map((p) => el('li', { class: 'running' }, el('span', { class: 'dot' }), el('span', { class: 'mono small' }, `pid ${p.pid}`), el('span', { class: 'mono small grow' }, p.command)))))
+      : '',
     w.worktree
       ? el('section', { class: 'dsec' }, el('h3', {}, 'Worktree'), el('div', { class: 'mono small' }, w.worktree.path.replace(/^\/home\/[^/]+/, '~')), el('div', { class: 'dim small' }, `${w.worktree.branch || ''}${w.worktree.dirty ? ` · ${w.worktree.dirty} dirty` : ' · clean'}${w.worktree.ahead !== undefined ? ` · +${w.worktree.ahead}/-${w.worktree.behind}` : ''}`))
       : '',

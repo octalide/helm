@@ -57,6 +57,8 @@ export type Pull = {
   author: Author;
   head: string;
   sha: string;
+  // the head branch lives in a fork, so this machine's origin/<head> is not it
+  fork?: boolean;
   base: string;
   closes: number[];
   review?: string;
@@ -200,6 +202,9 @@ export type Report = { state: ReportState; note?: string; at: number };
 
 export type PlanStep = { text: string; done: boolean };
 
+// a live process an ended agent left in its worktree; helm reports it and never kills it
+export type Leftover = { pid: number; command: string };
+
 // one issue in the ledger: queued in a session's backlog, then worked by one agent at a time
 export type Work = {
   repo: RepoName;
@@ -212,6 +217,8 @@ export type Work = {
   report?: Report;
   // the agent's plan as it last reported it
   plan?: PlanStep[];
+  // what was still running in its worktree when its agent last ended
+  leftovers?: Leftover[];
   // when the work entered each phase, oldest first
   history?: { phase: Phase; at: number }[];
   queuedAt: number;
@@ -330,6 +337,10 @@ export type Subscription = {
   tags?: string[];
   bots: boolean;
   until?: Until;
+  // a pr subscription's expected head. named by the caller, ci on a head that is neither it nor past it is not its
+  // verdict; guessed from the local checkout, which can itself be stale, only ci on a head strictly behind it is not
+  head?: string;
+  named?: boolean;
   session: string;
   agent?: string;
   createdAt: number;
@@ -350,7 +361,7 @@ export type HelmEvent = {
   sha?: string;
   tag?: string;
   // tags a filter reads: opened, closed, merged, comment, review, ready, draft, edited, labeled, settled, stalled,
-  // completed, success, failure, phase, decision, answered, progress, complete
+  // completed, success, failure, phase, decision, answered, progress, complete, leftovers
   tags: string[];
   author?: Author;
   // one line, then detail lines

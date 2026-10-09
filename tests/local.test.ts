@@ -3,6 +3,8 @@ import { mergeConfig, DEFAULT_CONFIG } from '../src/core/config.ts';
 import { trimLog } from '../src/daemon/helmd.ts';
 import { repoOfRemote } from '../src/core/repo.ts';
 import { parseBranches, parseStatus, parseWorktrees } from '../src/daemon/local.ts';
+import { leftovers } from '../src/daemon/procs.ts';
+import { table } from './fixtures.ts';
 
 describe('local git parsing', () => {
   it('reads remotes in every spelling', () => {
@@ -38,5 +40,21 @@ describe('config and logs', () => {
     const out = trimLog(raw, { errors: true }).split('\n');
     expect(out.at(-1)).toBe('##[error]boom');
     expect(out[0]).toBe('… (line 81)');
+  });
+
+  it('finds the processes left inside a worktree and nothing beside it', async () => {
+    const procs = table({
+      10: ['/r/.claude/worktrees/fix/61', 'bash -c until [ -s out.log ]; do :; done'],
+      11: ['/r/.claude/worktrees/fix/61/web', 'node serve.js'],
+      12: ['/r/.claude/worktrees/fix/610', 'vitest'],
+      13: ['/r', 'claude'],
+      14: [undefined, 'not mine'],
+      15: ['/r/.claude/worktrees/fix/61', ''],
+      16: ['/r/.claude/worktrees/fix/61', 'helmd'],
+    });
+    expect(await leftovers('/r/.claude/worktrees/fix/61/', procs, 16)).toEqual([
+      { pid: 10, command: 'bash -c until [ -s out.log ]; do :; done' },
+      { pid: 11, command: 'node serve.js' },
+    ]);
   });
 });

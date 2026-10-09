@@ -1,7 +1,7 @@
 import type { ClaimBody, DecisionBody, QueueBody, RegisterBody, ReportBody, SubscribeBody } from '../core/protocol.ts';
 import { isOpen } from '../core/decision.ts';
 import { workKey } from '../core/protocol.ts';
-import type { AgentRecord, Answer, Audience, Decision, HelmEvent, Letter, Phase, Session, SessionRole, Subscription, Work } from '../core/types.ts';
+import type { AgentRecord, Answer, Audience, Decision, HelmEvent, Leftover, Letter, Phase, Session, SessionRole, Subscription, Work } from '../core/types.ts';
 
 // bumped when the stored shape changes; an older file is migrated or refused, never read as this one
 export const LEDGER_VERSION = 2;
@@ -131,7 +131,8 @@ export class Ledger {
     if (!has) this.subscribe({ session: s.id, scope: { kind } });
   }
 
-  subscribe(b: SubscribeBody): Subscription {
+  // guess: a pr subscription's head when the caller named none
+  subscribe(b: SubscribeBody, guess?: string): Subscription {
     const spans = b.scope.kind === 'work' || b.scope.kind === 'fleet';
     if (!spans && !b.repo) throw new Error(`a ${b.scope.kind} subscription names its repository`);
     if (b.until !== undefined && b.ci === 'none' && b.until === 'settled') throw new Error('until settled needs ci other than none');
@@ -146,6 +147,7 @@ export class Ledger {
       ...(spans ? {} : { repo: b.repo }),
       ...(b.tags ? { tags: b.tags } : {}),
       ...(b.until !== undefined ? { until: b.until } : {}),
+      ...(b.scope.kind === 'pr' && b.sha ? { head: b.sha, named: true } : b.scope.kind === 'pr' && guess ? { head: guess } : {}),
       ...(b.agent ? { agent: b.agent } : {}),
     };
     this.data.subscriptions[id] = sub;
@@ -269,6 +271,18 @@ export class Ledger {
     history.push({ phase, at: this.now() });
     if (history.length > HISTORY_KEEP) history.splice(0, history.length - HISTORY_KEEP);
     this.changed();
+  }
+
+  // what an ended agent left running in the work's worktree, replaced at each ending
+  leftovers(repo: string, issue: number, found: Leftover[]): Work | undefined {
+    const w = this.data.work[workKey(repo, issue)];
+    if (!w) return undefined;
+    if (JSON.stringify(w.leftovers ?? []) === JSON.stringify(found)) return w;
+    if (found.length) w.leftovers = found;
+    else delete w.leftovers;
+    w.updatedAt = this.now();
+    this.changed();
+    return w;
   }
 
   // at is when it finished, when that was before now: a close helm learns of late

@@ -174,7 +174,7 @@ export const TOOLS: Tool[] = [
     name: 'watch',
     eager: true,
     description:
-      'Subscribe to repository events, delivered to you as they happen instead of polling. subscribe: scope is repo, issue <n>, pr <n>, branch <name>, run <id> or tag <glob>; ci is settled (every verdict), failures, all or none; until settled, merged, closed or an ISO time removes it once reached. A subagent that subscribes owns the subscription: the delivery rides its next tool call, or after 60 s, or once it has ended its turn, arrives as a message that resumes it. So subscribe, then carry on or end your turn: never sleep or poll. To wait for CI on your PR: subscribe with scope "pr <n>", ci "settled", until "settled". unsubscribe takes the id; list shows this session\'s.',
+      'Subscribe to repository events, delivered to you as they happen instead of polling. subscribe: scope is repo, issue <n>, pr <n>, branch <name>, run <id> or tag <glob>; ci is settled (every verdict), failures, all or none; until settled, merged, closed or an ISO time removes it once reached. A subagent that subscribes owns the subscription: the delivery rides its next tool call, or after 60 s, or once it has ended its turn, arrives as a message that resumes it. So subscribe, then carry on or end your turn: never sleep or poll. To wait for CI on your PR: subscribe with scope "pr <n>", ci "settled", until "settled", and sha set to the head you pushed. unsubscribe takes the id; list shows this session\'s.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -183,6 +183,7 @@ export const TOOLS: Tool[] = [
         scope: { type: 'string', description: 'repo (default), issue <n>, pr <n>, branch <name>, run <id>, tag <glob>, work or fleet' },
         ci: { type: 'string', enum: ['settled', 'failures', 'all', 'none'] },
         until: { type: 'string', description: 'settled, merged, closed or an ISO time' },
+        sha: { type: 'string', description: 'pr scope: the head you pushed, so a verdict on an older head is not taken for yours' },
         tags: { type: 'array', items: { type: 'string' }, description: 'item events to take: opened, closed, reopened, merged, ready, draft, comment, review, pushed, edited, labeled' },
         bots: { type: 'boolean', description: 'take events from bot accounts too' },
         id: { type: 'string', description: 'unsubscribe: the subscription id' },
@@ -210,6 +211,7 @@ export const TOOLS: Tool[] = [
         ...(Array.isArray(input.tags) ? { tags: input.tags.map(String) } : {}),
         ...(typeof input.bots === 'boolean' ? { bots: input.bots } : {}),
         ...(until ? { until } : {}),
+        ...(str(input.sha) ? { sha: str(input.sha)! } : {}),
         ...(agent ? { agent } : {}),
       });
       const who = agent ? `for this agent (${agent}). A delivery arrives with the result of your next tool call; if you make none within 60 s or have ended your turn, it arrives as a message that resumes you. Do not wait or poll: carry on, or end your turn.` : 'for the main loop. Deliveries arrive as prompts, or with the next tool result while a turn runs.';
