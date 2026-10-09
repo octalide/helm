@@ -36,7 +36,7 @@ export async function dispatchIssues(env: ToolEnv, port: DispatchPort, input: Di
         lines.push(`${key}: ${detail.pr ? 'a pull request' : detail.state}, not dispatched`);
         continue;
       }
-      await env.client.claim({ session: env.session(), repo, issue });
+      await env.client.claim({ session: env.session(), repo, issue, title: detail.title });
       let routing: Routing;
       if (named) routing = asRouting(named, 'caller', port.now());
       else {
@@ -54,7 +54,7 @@ export async function dispatchIssues(env: ToolEnv, port: DispatchPort, input: Di
         lines.push(`${key}: the agent did not start: ${spawned.deny ?? 'no agent id'}; it stays queued`);
         continue;
       }
-      await env.client.claim({ session: env.session(), repo, issue, agent: spawned.agentId, routing });
+      await env.client.claim({ session: env.session(), repo, issue, title: detail.title, agent: spawned.agentId, routing });
       const low = routing.by === 'judge' && (routing.confidence ?? 0) < cfg.review;
       await env.client.decide({
         kind: 'routing',
