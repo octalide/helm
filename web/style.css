@@ -273,14 +273,16 @@ a.tile:hover { text-decoration: none; border-color: var(--axis); }
 .agents-mini { display: flex; flex-wrap: wrap; gap: 4px 10px; }
 
 /* work cards */
-.wcard { display: grid; gap: 6px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); box-shadow: var(--shadow); font-size: 13px; position: relative; }
+.wcard { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 6px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); box-shadow: var(--shadow); font-size: 13px; position: relative; }
 .wcard:hover, .wcard:focus { text-decoration: none; border-color: var(--axis); }
 .wcard.p-blocked, .wcard.p-failing { box-shadow: inset 3px 0 0 var(--bad), var(--shadow); }
 .wcard.p-stalled { box-shadow: inset 3px 0 0 var(--warn), var(--shadow); }
 .wcard.p-ready { box-shadow: inset 3px 0 0 var(--ready), var(--shadow); }
 .wcard.p-parked { box-shadow: inset 3px 0 0 var(--parked), var(--shadow); }
 .wcard.p-done { opacity: 0.7; }
-.wc-head { display: flex; gap: 6px; align-items: center; }
+.wc-head { display: flex; flex-wrap: wrap; gap: 2px 6px; align-items: center; }
+.wc-head .ref { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.wc-head > :last-child { margin-left: auto; }
 .wc-head time { font-size: 11.5px; }
 .wc-title { font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
 .wc-meta { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
@@ -303,7 +305,7 @@ a.tile:hover { text-decoration: none; border-color: var(--axis); }
 .t-line-bad { --lc: var(--bad); }
 .t-line-queued { --lc: var(--queued); }
 .t-line-parked { --lc: var(--parked); }
-.bcol { display: grid; gap: 8px; align-content: start; min-height: 40px; padding: 4px; border-radius: 10px; background: color-mix(in srgb, var(--ink) 2%, transparent); }
+.bcol { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; align-content: start; min-height: 40px; padding: 4px; border-radius: 10px; background: color-mix(in srgb, var(--ink) 2%, transparent); }
 .lane-head { padding: 10px 2px 0; font-size: 13px; border-top: 1px dashed var(--line); margin-top: 4px; }
 
 /* epics */
