@@ -200,6 +200,9 @@ export type Report = { state: ReportState; note?: string; at: number };
 
 export type PlanStep = { text: string; done: boolean };
 
+// a live process an ended agent left in its worktree; helm reports it and never kills it
+export type Leftover = { pid: number; command: string };
+
 // one issue in the ledger: queued in a session's backlog, then worked by one agent at a time
 export type Work = {
   repo: RepoName;
@@ -212,6 +215,8 @@ export type Work = {
   report?: Report;
   // the agent's plan as it last reported it
   plan?: PlanStep[];
+  // what was still running in its worktree when its agent last ended
+  leftovers?: Leftover[];
   // when the work entered each phase, oldest first
   history?: { phase: Phase; at: number }[];
   queuedAt: number;
@@ -342,7 +347,7 @@ export type HelmEvent = {
   sha?: string;
   tag?: string;
   // tags a filter reads: opened, closed, merged, comment, review, ready, draft, edited, labeled, settled, stalled,
-  // completed, success, failure, phase, decision, answered, progress, complete
+  // completed, success, failure, phase, decision, answered, progress, complete, leftovers
   tags: string[];
   author?: Author;
   // one line, then detail lines
