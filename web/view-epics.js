@@ -56,7 +56,7 @@ function header(n, path) {
     { class: 'panel ehead' },
     crumbs,
     el('div', { class: 'ehead-main' }, el('div', { class: 'ehero' }, el('div', { class: 'ehero-num' }, `${pct(r)}%`), el('div', { class: 'dim' }, `${r.done} of ${plural(r.total, 'leaf', 'leaves')} done`)), el('div', { class: 'grow' }, el('h1', {}, ext(n.url, clean(n.title))), rollupBar(r, 'fat'), legend(ROLLUP_LEGEND))),
-    el('div', { class: 'estats' }, stat('active', r.active), stat('in ci', r.ci), stat('ready', r.ready), stat('need attention', r.attention, r.attention ? 'bad' : ''), stat('queued', r.queued), stat('parked', r.parked || 0), stat('unowned', r.unowned)),
+    el('div', { class: 'estats' }, stat('active', r.active), stat('in ci', r.ci), stat('ready', r.ready), stat('need attention', r.attention, r.attention ? 'bad' : ''), stat('queued', r.queued), stat('parked', r.parked), stat('unowned', r.unowned)),
   );
 }
 
