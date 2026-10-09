@@ -35,8 +35,8 @@ export class Mailbox {
   private readonly timers = new Map<string, Timer>();
   // a main-loop turn runs, or a prompt this mailbox submitted is on its way to one: either ends at turn.complete
   private busy = false;
-  // main-loop turns ended, so a submission can tell whether the turn events took over the busy flag while it waited
-  private ended = 0;
+  // main-loop turn events seen, so a submission can tell whether they took over the busy flag while it waited
+  private moves = 0;
   private readonly host: MailHost;
 
   constructor(host: MailHost) {
@@ -69,12 +69,13 @@ export class Mailbox {
 
   turnStarted(): void {
     this.busy = true;
+    this.moves++;
   }
 
   // a main-loop turn ended: what is still waiting starts the next one
   async turnEnded(): Promise<void> {
     this.busy = false;
-    this.ended++;
+    this.moves++;
     await this.prompt();
   }
 
@@ -119,22 +120,22 @@ export class Mailbox {
   private async prompt(): Promise<void> {
     while (!this.busy && this.mine('').length) {
       this.busy = true;
-      const ended = this.ended;
+      const moves = this.moves;
       const text = await this.attach(undefined);
-      if (text !== undefined) await this.submit(text);
-      else if (ended === this.ended) this.busy = false;
+      if (text !== undefined) await this.submit(text, false);
+      else if (moves === this.moves) this.busy = false;
     }
   }
 
-  // a prompt holds the loop busy until its turn ends; one a hook dropped starts no turn, so it frees the loop, unless
-  // a turn ended meanwhile and the turn events hold the flag
-  private async submit(text: string): Promise<void> {
+  // a prompt holds the loop busy until its turn ends; one a hook dropped starts no turn, so the loop goes back to how
+  // it was, unless a turn started or ended meanwhile and the turn events hold the flag
+  private async submit(text: string, was: boolean): Promise<void> {
     this.busy = true;
-    const ended = this.ended;
+    const moves = this.moves;
     const entered = await this.host.submit(text);
     if (entered) return;
     this.host.log('helm: a prompt of letters was dropped by a hook');
-    if (ended === this.ended) this.busy = false;
+    if (moves === this.moves) this.busy = was;
   }
 
   private async flush(agent: string): Promise<void> {
@@ -148,7 +149,7 @@ export class Mailbox {
     }
     if (refused === undefined) return;
     this.host.log(`helm: a message to agent ${agent} was refused (${refused}); relayed to the main loop`);
-    await this.submit([`[helm relay] for agent ${agent}, which a message could not reach: ${refused}`, text].join('\n'));
+    await this.submit([`[helm relay] for agent ${agent}, which a message could not reach: ${refused}`, text].join('\n'), this.busy);
     await this.host.retire(agent);
   }
 }
