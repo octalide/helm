@@ -12,3 +12,8 @@ export function selfWorked(w: Work): boolean {
 export function hasWorker(w: Work): boolean {
   return w.agent !== undefined || selfWorked(w);
 }
+
+// whether its agent came with it from a gone session: that agent is gone with the session, and nothing reaches it again
+export function inherited(w: Work): boolean {
+  return w.agent !== undefined && w.adopted?.agent === w.agent;
+}

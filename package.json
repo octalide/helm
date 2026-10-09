@@ -1,10 +1,13 @@
 {
   "name": "helm",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Active-work tracking for Claude Code fleets: forge state, a work ledger, agent event delivery and a live view.",
   "type": "module",
   "license": "MIT",
   "private": true,
+  "helm": {
+    "protocol": 2
+  },
   "engines": {
     "node": ">=24"
   },

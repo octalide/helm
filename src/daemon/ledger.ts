@@ -1,6 +1,7 @@
 import type { ClaimBody, DecisionBody, QueueBody, RegisterBody, ReportBody, SubscribeBody } from '../core/protocol.ts';
 import { isOpen } from '../core/decision.ts';
 import { workKey } from '../core/protocol.ts';
+import { inherited, selfWorked } from '../core/work.ts';
 import type { AgentRecord, Answer, Audience, Decision, HelmEvent, Leftover, Letter, Phase, RepoName, Session, SessionRole, Subscription, Work } from '../core/types.ts';
 
 // bumped when the stored shape changes; an older file is migrated or refused, never read as this one
@@ -48,6 +49,10 @@ const WORK_KEEP_MS = 30 * 24 * 3600_000;
 const HISTORY_KEEP = 60;
 // a session gone this long is forgotten, with its subscriptions and letters
 const SESSION_KEEP_MS = 7 * 24 * 3600_000;
+
+// what a session took over from the gone sessions it succeeds: their unfinished work in backlog order, their
+// subscriptions, and the open decisions now addressed to it
+export type Adoption = { session: string; from: string[]; work: Work[]; subscriptions: string[]; decisions: Decision[] };
 
 export class ClaimError extends Error {
   owner: string;
@@ -227,8 +232,8 @@ export class Ledger {
       ...(b.routing ? { routing: b.routing } : {}),
     };
     if (b.agent && b.agent !== base.agent) {
-      // a new agent on stopped work takes up what the stopped one still waited on
-      if (base.agent && base.owner && base.report?.state === 'stopped') this.handOver(base.owner, base.agent, b.session, b.agent);
+      // a new agent on stopped or adopted work takes up what the agent it replaces still waited on
+      if (base.agent && base.owner && (base.report?.state === 'stopped' || inherited(base))) this.handOver(base.owner, base.agent, b.session, b.agent);
       delete w.report;
     }
     this.data.work[key] = w;
@@ -247,6 +252,78 @@ export class Ledger {
   // the unfinished work an agent reported stopped on: what reaches it would resume it, so it goes to its session instead
   stopped(session: string, agent: string): Work | undefined {
     return Object.values(this.data.work).find((w) => !w.finished && w.owner === session && w.agent === agent && w.report?.state === 'stopped');
+  }
+
+  // the unfinished work whose agent nothing should reach: one that reported stopped, which a letter would resume, or one
+  // gone with the session the work was adopted from. what reaches it goes to its session instead
+  held(session: string, agent: string): { work: Work; why: 'stopped' | 'inherited' } | undefined {
+    const w = Object.values(this.data.work).find((x) => !x.finished && x.owner === session && x.agent === agent && (x.report?.state === 'stopped' || inherited(x)));
+    return w ? { work: w, why: w.report?.state === 'stopped' ? 'stopped' : 'inherited' } : undefined;
+  }
+
+  // a repo session takes over what the gone repo sessions of its repository left, once every other one there is gone;
+  // a coordinator or another session never does, and nothing is taken from a live session. from names the session this
+  // one goes on from in the same process, which has ended: it is handed over exactly, whatever the role
+  adopt(id: string, from?: string): Adoption | undefined {
+    const s = this.data.sessions[id];
+    if (!s || s.gone) return undefined;
+    const named = from !== undefined && from !== id ? this.data.sessions[from] : undefined;
+    let gone: Session[];
+    if (named) {
+      named.gone = true;
+      gone = [named];
+    } else {
+      if (s.role !== 'repo' || !s.repo) return undefined;
+      gone = Object.values(this.data.sessions).filter((x) => x.id !== id && x.role === 'repo' && x.repo === s.repo);
+      if (gone.some((x) => !x.gone)) return undefined;
+    }
+    const ids = new Set(gone.map((x) => x.id));
+    const now = this.now();
+    const work = Object.values(this.data.work)
+      .filter((w) => !w.finished && w.owner !== undefined && ids.has(w.owner))
+      .sort((a, b) => a.order - b.order || a.queuedAt - b.queuedAt);
+    let order = this.nextOrder(id);
+    const taken = new Set<string>();
+    const by = new Set<string>();
+    for (const w of work) {
+      const was = w.owner!;
+      by.add(was);
+      // the gone session's own claim was that conversation's, not this one's
+      if (selfWorked(w)) delete w.report;
+      w.adopted = { from: was, at: now, ...(w.agent ? { agent: w.agent } : {}) };
+      w.owner = id;
+      w.order = order++;
+      w.updatedAt = now;
+      taken.add(workKey(w.repo, w.issue));
+    }
+    const subscriptions: string[] = [];
+    for (const sub of Object.values(this.data.subscriptions)) {
+      if (!ids.has(sub.session)) continue;
+      // the role's own subscription, which this session holds already
+      if (sub.agent === undefined && (sub.scope.kind === 'work' || sub.scope.kind === 'fleet')) continue;
+      by.add(sub.session);
+      sub.session = id;
+      subscriptions.push(sub.id);
+    }
+    // what was addressed to a gone session, and what went to the person only because its session was gone; what a
+    // session handed on to the person itself stays the person's
+    const decisions: Decision[] = [];
+    for (const d of Object.values(this.data.decisions)) {
+      if (!isOpen(d)) continue;
+      const addressed = d.to === 'session' && d.session !== undefined && ids.has(d.session);
+      const orphan = d.to === 'person' && (d.escalated === undefined || d.escalated.by === 'helm') && d.repo !== undefined && d.issue !== undefined && taken.has(workKey(d.repo, d.issue)) && this.audience(d).session === id;
+      if (!addressed && !orphan) continue;
+      if (addressed) by.add(d.session!);
+      d.to = 'session';
+      d.session = id;
+      delete d.escalated;
+      d.updatedAt = now;
+      decisions.push(d);
+    }
+    if (named) this.changed();
+    if (!work.length && !subscriptions.length && !decisions.length) return undefined;
+    this.changed();
+    return { session: id, from: [...by], work, subscriptions, decisions };
   }
 
   // a stopped agent running again: its owner picked it back up, so the stop no longer holds

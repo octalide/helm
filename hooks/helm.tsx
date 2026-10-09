@@ -5,6 +5,7 @@ import { daemonAction, PROTOCOL, type StreamFrame } from '../src/core/protocol.t
 import { isRepoName, repoOfRemote } from '../src/core/repo.ts';
 import type { AgentRecord, AgentStatus, Effort, Fleet, RepoName, SessionRole } from '../src/core/types.ts';
 import { HelmClient, HelmError } from '../src/mod/client.ts';
+import { type Install, newestInstall } from '../src/mod/install.ts';
 import { type DispatchPort, dispatchTool, issueAgentName } from '../src/mod/dispatch.ts';
 import { Mailbox } from '../src/mod/mailbox.ts';
 import { type Tool, TOOLS } from '../src/mod/tools.ts';
@@ -66,23 +67,33 @@ async function clientFor($: $): Promise<HelmClient> {
   }, paths.socket);
 }
 
-function daemonArgv($: $, cmd: string, ...rest: string[]): string[] {
-  return ['node', '--disable-warning=ExperimentalWarning', `${$.plugin.root}/src/daemon/main.ts`, cmd, ...rest];
+function daemonArgv(root: string, cmd: string, ...rest: string[]): string[] {
+  return ['node', '--disable-warning=ExperimentalWarning', `${root}/src/daemon/main.ts`, cmd, ...rest];
+}
+
+// the install whose helmd this mod starts or replaces helmd with, read again each time, since a newer one can be
+// installed while the session runs
+function daemonInstall($: $, own: Install): Promise<Install> {
+  return newestInstall(own, {
+    dirs: async (path) => (await $.fs.list(path)).filter((e) => e.kind === 'dir').map((e) => e.name),
+    read: (path) => $.fs.read(path),
+  });
 }
 
 let reloadSaid = false;
 
-// helmd answering at this mod's version or newer; an older one is replaced, a newer one is used as it is
-async function ensureDaemon($: $, client: HelmClient, version: string): Promise<void> {
+// helmd answering at the newest installed version or newer; an older one is replaced, a newer one is used as it is
+async function ensureDaemon($: $, client: HelmClient, own: Install): Promise<void> {
   const up = await client.health().catch(() => undefined);
-  const cmd = daemonAction(up, version);
+  const install = await daemonInstall($, own);
+  const cmd = daemonAction(up, install.version);
   if (cmd === 'use') return;
   if (cmd === 'reload') {
     if (!reloadSaid) $.ui.log(`helm: helmd ${up?.version} speaks protocol ${up?.protocol}, newer than this session's mod (${PROTOCOL}): run /reload-plugins`);
     reloadSaid = true;
     return;
   }
-  const r = await $.process.run(daemonArgv($, cmd), { timeoutMs: 30_000 });
+  const r = await $.process.run(daemonArgv(install.root, cmd), { timeoutMs: 30_000 });
   if (r.exitCode !== 0) throw new Error(`helmd ${cmd} failed: ${(r.stderr || r.stdout).trim()}`);
 }
 
@@ -102,9 +113,10 @@ async function agentRecords($: $): Promise<AgentRecord[]> {
   }));
 }
 
-async function bind($: $, r: Runtime): Promise<void> {
+// from: the session this process went on from, which helmd hands over to this one whole
+async function bind($: $, r: Runtime, from?: string): Promise<void> {
   r.session = await $.session.id();
-  await r.client.register({ id: r.session, cwd: await $.session.cwd(), role: r.role, ...(r.repo ? { repo: r.repo } : {}) });
+  await r.client.register({ id: r.session, cwd: await $.session.cwd(), role: r.role, ...(r.repo ? { repo: r.repo } : {}), ...(from && from !== r.session ? { from } : {}) });
 }
 
 // issue agent types registered by this load of the module, by name
@@ -170,8 +182,10 @@ function pump($: $, r: Runtime): void {
   const run = async () => {
     try {
       let buf = '';
-      for await (const piece of $.process.spawn({ argv: daemonArgv($, 'stream', r.session) })) {
-        if (!(await holds($, r))) break;
+      const session = r.session;
+      // a stream reads one session's letters: once the process goes on under another id, it is opened again for that one
+      for await (const piece of $.process.spawn({ argv: daemonArgv(r.install.root, 'stream', session) })) {
+        if (!(await holds($, r)) || r.session !== session) break;
         if (piece.stream !== 'stdout') continue;
         buf += piece.text;
         for (let i = buf.indexOf('\n'); i >= 0; i = buf.indexOf('\n')) {
@@ -186,7 +200,7 @@ function pump($: $, r: Runtime): void {
     if (!(await holds($, r))) return;
     r.timers.push(
       $.clock.after(RECONNECT_MS, () => {
-        void ensureDaemon($, r.client, r.version)
+        void ensureDaemon($, r.client, r.install)
           .then(() => bind($, r))
           .catch((e: Error) => $.ui.log(`helm: helmd unavailable: ${e.message}`, { to: 'debug' }))
           .finally(() => r.alive && pump($, r));
@@ -280,12 +294,14 @@ export const register: Register = (on) => {
     }
     const client = await clientFor($);
     rolePrompts = { coordinator: await $.fs.read(`${$.plugin.root}/prompts/coordinator.md`), repo: await $.fs.read(`${$.plugin.root}/prompts/repo.md`) };
-    const version = (JSON.parse(await $.fs.read(`${$.plugin.root}/package.json`)) as { version: string }).version;
+    const manifest = JSON.parse(await $.fs.read(`${$.plugin.root}/package.json`)) as { name: string; version: string };
+    const install: Install = { root: $.plugin.root, name: manifest.name, version: manifest.version, protocol: PROTOCOL };
     const repo = await sessionRepo($);
     const asked = (await $.env.get('HELM_ROLE')) as SessionRole | undefined;
     const r: Runtime = {
       client,
-      version,
+      version: install.version,
+      install,
       home: (await $.env.get('HOME')) ?? '',
       session: await $.session.id(),
       role: asked && ROLES.includes(asked) ? asked : repo ? 'repo' : 'other',
@@ -313,7 +329,7 @@ export const register: Register = (on) => {
     for (const t of tools) await $.tool.register({ name: t.name, description: t.description, inputSchema: t.inputSchema, isDeferred: !t.eager });
     await $.command.register({ name: PLUGIN, description: 'helm: status, role, web page' });
     try {
-      await ensureDaemon($, client, version);
+      await ensureDaemon($, client, install);
       await bind($, r);
       r.web = (await client.health()).web;
       issueTypes.clear();
@@ -341,9 +357,10 @@ export const register: Register = (on) => {
     const r = rt;
     if (!r) return out;
     if (e.reason === 'clear' || e.reason === 'resume') {
-      // the process goes on under another session id, with no session.start, and this instance keeps the binding
+      // the process goes on under another session id, with no session.start, and this instance keeps the binding; the
+      // new id takes over what the ended one held
       await update($, binder, () => r.instance).catch(() => {});
-      r.timers.push($.clock.after(500, () => void bind($, r).catch(() => {})));
+      r.timers.push($.clock.after(500, () => void bind($, r, e.sessionId).catch(() => {})));
       return out;
     }
     r.alive = false;
@@ -460,7 +477,7 @@ export const register: Register = (on) => {
         return { text: url };
       }
       if (head === 'restart') {
-        await $.process.run(daemonArgv($, 'restart'), { timeoutMs: 30_000 });
+        await $.process.run(daemonArgv((await daemonInstall($, r.install)).root, 'restart'), { timeoutMs: 30_000 });
         return { text: 'helmd restarted' };
       }
       return { text: await helpText(r) };
