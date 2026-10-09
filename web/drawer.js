@@ -1,6 +1,6 @@
 // the detail of one work item, opened over any view by the open= query
 import { segmentsOf } from './charts.js';
-import { $, at, dur, el, ext, filter, issueUrl, keyOf, model, PHASE, phasePill, phaseSince, planOf, repoShort, setQuery, store } from './core.js';
+import { $, at, dur, el, ext, filter, isRecord, issueUrl, keyOf, model, PHASE, phasePill, phaseSince, planOf, repoShort, setQuery, store } from './core.js';
 import { agentDot, checkText, ciBar, jobList, tierChip } from './parts.js';
 
 export function renderDrawer() {
@@ -54,7 +54,7 @@ export function renderDrawer() {
       ? el('section', { class: 'dsec' }, el('h3', {}, 'Routing'), el('div', {}, el('b', {}, w.routing.tier || 'named'), ` · ${model(w.routing.model)} / ${w.routing.effort} · by ${w.routing.by}${w.routing.confidence !== undefined ? ` at ${Math.round(w.routing.confidence * 100)}%` : ''}`), w.routing.reason ? el('div', { class: 'dim' }, w.routing.reason) : '')
       : '',
     decisions.length
-      ? el('section', { class: 'dsec' }, el('h3', {}, 'Decisions'), el('div', { class: 'list' }, decisions.map((d) => el('div', { class: 'row' }, el('span', { class: 'chip kind' }, d.kind), el('span', { class: 'grow' }, d.title, d.answer ? el('div', { class: 'dim' }, `→ ${d.answer.option ? `${d.answer.option} ` : ''}${d.answer.text}`) : ''), el('a', { class: 'dim', href: '#/inbox' }, d.state)))))
+      ? el('section', { class: 'dsec' }, el('h3', {}, 'Decisions'), el('div', { class: 'list' }, decisions.map((d) => el('div', { class: 'row' }, el('span', { class: 'chip kind' }, d.kind), el('span', { class: 'grow' }, d.title, d.answer ? el('div', { class: 'dim' }, `→ ${d.answer.option ? `${d.answer.option} ` : ''}${d.answer.text}`) : ''), el('a', { class: 'dim', href: isRecord(d) ? '#/review' : '#/inbox' }, isRecord(d) && d.state === 'dismissed' ? 'reviewed' : d.state)))))
       : '',
     w.worktree
       ? el('section', { class: 'dsec' }, el('h3', {}, 'Worktree'), el('div', { class: 'mono small' }, w.worktree.path.replace(/^\/home\/[^/]+/, '~')), el('div', { class: 'dim small' }, `${w.worktree.branch || ''}${w.worktree.dirty ? ` · ${w.worktree.dirty} dirty` : ' · clean'}${w.worktree.ahead !== undefined ? ` · +${w.worktree.ahead}/-${w.worktree.behind}` : ''}`))
