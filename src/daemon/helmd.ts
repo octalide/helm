@@ -45,7 +45,8 @@ export async function readConfig(paths: HelmPaths): Promise<Config> {
   }
 }
 
-type Poll = PollStatus & { due: number; running: boolean };
+// again: asked for while it ran, so it runs once more as soon as it finishes
+type Poll = PollStatus & { due: number; running: boolean; again?: boolean };
 
 // how many repositories poll at once
 const POLL_CONCURRENCY = 3;
@@ -230,7 +231,10 @@ export class Daemon {
   async pollRepo(repo: RepoName, force = false): Promise<void> {
     const st = this.polls.get(repo) ?? { active: false, interval: 0, failures: 0, due: 0, running: false };
     this.polls.set(repo, st);
-    if (st.running) return;
+    if (st.running) {
+      st.again = true;
+      return;
+    }
     st.running = true;
     try {
       const p = await this.poller(repo);
@@ -252,6 +256,10 @@ export class Daemon {
       const base = st.active ? this.config.poll.active : this.config.poll.idle;
       st.interval = st.failures ? Math.min(this.config.poll.idle * 4, base * 2 ** st.failures) : base;
       st.due = this.now() + st.interval * 1000;
+    }
+    if (st.again) {
+      delete st.again;
+      await this.pollRepo(repo, force);
     }
   }
 
@@ -306,7 +314,7 @@ export class Daemon {
       }
       if (e.kind === 'ci' && e.pr !== undefined) {
         if (e.tags.includes('stalled')) {
-          const raised = this.ledger.raise(`stall:ci:${repo}#${e.pr}`, { kind: 'stall', repo, title: `CI stalled on pr #${e.pr}`, body: [e.text, ...(e.detail ?? []), e.url ?? ''].join('\n'), blocking: false, ...this.prIssue(repo, e.pr) });
+          const raised = this.ledger.raise(`stall:ci:${repo}#${e.pr}`, `head ${e.sha ?? ''}`, { kind: 'stall', repo, title: `CI stalled on pr #${e.pr}`, body: [e.text, ...(e.detail ?? []), e.url ?? ''].join('\n'), blocking: false, ...this.prIssue(repo, e.pr) });
           if (raised) this.announce(raised);
         }
         if (e.tags.includes('settled')) this.ledger.resolveKey(`stall:ci:${repo}#${e.pr}`);
@@ -315,7 +323,7 @@ export class Daemon {
         const run = forge?.runs.find((r) => r.id === e.run);
         const key = `failure:${repo}:${run?.workflow ?? ''}:${e.branch}`;
         if (e.tags.includes('failure')) {
-          const raised = this.ledger.raise(key, { kind: 'failure', repo, title: `${run?.workflow ?? 'CI'} failing on ${e.branch}`, body: [e.text, e.url ?? ''].join('\n'), blocking: false });
+          const raised = this.ledger.raise(key, `run ${e.run}`, { kind: 'failure', repo, title: `${run?.workflow ?? 'CI'} failing on ${e.branch}`, body: [e.text, e.url ?? ''].join('\n'), blocking: false });
           if (raised) this.announce(raised);
         }
         if (e.tags.includes('success')) this.ledger.resolveKey(key);
@@ -396,7 +404,7 @@ export class Daemon {
       const was = before.get(key);
       const stallKey = `stall:work:${key}`;
       if (v.phase === 'stalled') {
-        const raised = this.ledger.raise(stallKey, {
+        const raised = this.ledger.raise(stallKey, stallCondition(v), {
           kind: 'stall',
           repo: v.repo,
           issue: v.issue,
@@ -557,9 +565,12 @@ export class Daemon {
     return this.ledger.claim(b, title);
   }
 
+  // an agent reports right after it moved the forge (opened or readied a pr, pushed): reading its repository now
+  // keeps the derived phase from lagging what the agent did until the next poll
   report(b: ReportBody): ReturnType<Ledger['report']> {
     const out = this.ledger.report(b);
     for (const d of out.decisions) this.announce(d);
+    void this.pollRepo(b.repo);
     return out;
   }
 
@@ -695,6 +706,12 @@ export class Daemon {
   async persist(): Promise<void> {
     await writeJson(this.paths.ledger, this.ledger.data);
   }
+}
+
+// what a stall stands for: the agent that left it and where its pr was, so a new head, agent or pr state is news
+function stallCondition(v: WorkView): string {
+  const pr = v.pull ? `pr #${v.pull.number} @${v.pull.sha} ${v.pull.draft ? 'draft' : `ci ${v.verdict}`}` : 'no pr';
+  return `agent ${v.agent ?? 'none'} · ${pr}`;
 }
 
 // timestamps dropped, then the error lines with what led up to them, a grep, or the tail

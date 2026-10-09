@@ -83,11 +83,11 @@ CI arrives as one verdict per PR head (`ci settled success` or `failure`, naming
 
 ## Phases
 
-Work moves through `queued → working → draft → ci → ready → done`, with `failing`, `blocked` and `stalled` beside them. Phases are derived, not set: from the agent's reports, whether its agent is alive, the PR that closes the issue or sits on its branch, and that PR's checks. A stalled item (no live agent, work not done) and a stalled or failing CI raise a decision on their own, and clear it once the condition passes.
+Work moves through `queued → working → draft → ci → ready → done`, with `failing`, `blocked`, `stalled` and `parked` beside them. Phases are derived, not set: from the agent's reports, whether its agent is alive, the PR that closes the issue or sits on its branch, that PR's checks, and the issue's labels and dependencies. A stalled item (no live agent, work not done) and a stalled or failing CI raise a decision on their own, and clear it once the condition passes. A dismissed one stays dismissed until its condition changes (a new PR head, a different agent, a different phase) or ends. Work set aside on purpose, labelled `blocked` or `parked` or blocked by an open issue, is `parked` while nobody is on it: it raises nothing and needs no attention. A report polls its repository at once, so the phase keeps up with what the agent just did.
 
 ## Hierarchy
 
-GitHub's sub-issues draw the tree. Every open issue with sub-issues that no other issue in a watched repository holds is a root epic, and each node joins its work item: phase, agent, tier and plan progress. Sub-issues in other repositories nest under their parent, and a sub-epic in a repository helm does not poll is counted from its summary. Each epic rolls up its leaves: done, active, in CI, ready, needing attention, queued and unowned. Sub-issues are read again only when their parent moved, or every 10 minutes.
+GitHub's sub-issues draw the tree. Every open issue with sub-issues that no other issue in a watched repository holds is a root epic, and each node joins its work item: phase, agent, tier and plan progress. Sub-issues in other repositories nest under their parent, and a sub-epic in a repository helm does not poll is counted from its summary. Each epic rolls up its leaves: done, active, in CI, ready, needing attention, queued, parked and unowned. Sub-issues are read again only when their parent moved, or every 10 minutes.
 
 Each work item keeps when it entered each phase, and finished work stays 30 days, so the page can draw a timeline. A coordinator hears an epic as one `[helm epic]` delivery whenever anything under it moves, carrying its rollup and every phase change under it in that batch, instead of a delivery per child. Work that needs someone still arrives at once.
 
@@ -114,7 +114,7 @@ A judge answer that names no tier falls back to `routing.fallback`, `standard` b
 | view | shows |
 |---|---|
 | Overview | active work as the headline, tiles for what waits on you, what needs attention, what is in CI, ready and done this week; the attention queue, runs in flight, every epic's progress, the pipeline by phase, throughput per day and each session |
-| Board | work as cards in phase columns (queued, working, draft, in ci, ready, attention, done), each with its agent, tier, plan progress and checks; lanes by session, epic, repository or tier |
+| Board | work as cards in phase columns (queued, working, draft, in ci, ready, attention, parked, done), each with its agent, tier, plan progress and checks; lanes by session, epic, repository or tier |
 | Epics | the sub-issue tree across repositories, each epic with its rollup bar, each leaf with its phase, plan and agent; drill into any epic |
 | Timeline | a lane per work item of the phases it went through over 6 hours to 30 days, and the median time work spends in each phase |
 | CI | runs in flight with every job and step, pass rate and run length, each workflow's recent outcomes, and failed runs with their logs |

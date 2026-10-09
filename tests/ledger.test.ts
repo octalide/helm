@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { hasWorker } from '../src/core/work.ts';
 import { phaseOf, viewOf } from '../src/daemon/derive.ts';
 import { ClaimError, emptyLedger, Ledger } from '../src/daemon/ledger.ts';
-import { check, forge, pull, T0 } from './fixtures.ts';
+import { check, forge, issue, pull, T0 } from './fixtures.ts';
 
 const ledger = () => {
   let now = T0;
@@ -67,6 +67,21 @@ describe('ledger', () => {
     expect(l.data.decisions[decisions[0]!.id]?.state).toBe('resolved');
   });
 
+  it('holds a dismissed condition until it changes or ends, then raises it again', () => {
+    const { l } = ledger();
+    const b = { kind: 'stall' as const, repo: 'o/r', issue: 1, title: 'stalled', body: '', blocking: false };
+    const first = l.raise('stall:work:o/r#1', 'agent x · pr @a', b)!;
+    expect(l.raise('stall:work:o/r#1', 'agent x · pr @b', b)).toBeUndefined();
+    expect(first.condition).toBe('agent x · pr @b');
+    l.dismiss(first.id);
+    expect(l.raise('stall:work:o/r#1', 'agent x · pr @b', b)).toBeUndefined();
+    const moved = l.raise('stall:work:o/r#1', 'agent y · pr @b', b)!;
+    expect(moved.id).not.toBe(first.id);
+    l.dismiss(moved.id);
+    l.resolveKey('stall:work:o/r#1');
+    expect(l.raise('stall:work:o/r#1', 'agent y · pr @b', b)?.state).toBe('open');
+  });
+
   it('marks a quiet session gone', () => {
     const { l, tick } = ledger();
     l.register({ id: 'A', cwd: '/' });
@@ -103,6 +118,18 @@ describe('phase', () => {
     expect(phaseOf({ ...w, owner: 'A' }, { ownerLive: true, blocking: false, issueClosed: false })).toBe('queued');
     // a repository with such work polls as active
     expect([hasWorker(self), hasWorker({ ...w, agent: 'x' }), hasWorker({ ...w, owner: 'A' })]).toEqual([true, true, false]);
+  });
+
+  it('parks work set aside by a label or an open blocker while nobody is on it', () => {
+    const p = pull(101, { draft: true });
+    const labelled = forge({ issues: [issue(1, { labels: ['Blocked'] })], pulls: [p] });
+    const waiting = forge({ issues: [issue(1, { blockedBy: 1 })], pulls: [p] });
+    const a = { ...w, agent: 'x', owner: 'A' };
+    expect(viewOf(a, labelled, undefined, new Map(), [], T0).phase).toBe('parked');
+    expect(viewOf(a, waiting, undefined, new Map(), [], T0).phase).toBe('parked');
+    expect(viewOf(w, forge({ issues: [issue(1, { labels: ['parked'] })] }), undefined, new Map(), [], T0).phase).toBe('parked');
+    expect(phaseOf(a, { agent: 'running', pull: p, blocking: false, issueClosed: false, setAside: true })).toBe('draft');
+    expect(phaseOf(a, { agent: 'gone', pull: p, blocking: true, issueClosed: false, setAside: true })).toBe('blocked');
   });
 
   it('finds the pr by closing reference or branch and the worktree by branch', () => {

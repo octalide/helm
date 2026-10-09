@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from '../src/core/config.ts';
 import { type HelmPaths, helmPaths } from '../src/core/paths.ts';
 import type { GitHub } from '../src/daemon/github.ts';
@@ -14,12 +14,12 @@ afterEach(async () => {
 });
 
 // a daemon over a scratch directory that never reaches github, with no timers
-async function daemon(log?: (line: string) => void): Promise<{ d: Daemon; paths: HelmPaths }> {
+async function daemon(opts: { log?: (line: string) => void; gh?: GitHub } = {}): Promise<{ d: Daemon; paths: HelmPaths }> {
   const home = await mkdtemp(join(tmpdir(), 'helm-test-'));
   dirs.push(home);
-  const gh = { rates: {} } as unknown as GitHub;
+  const gh = opts.gh ?? ({ rates: {} } as unknown as GitHub);
   const paths = helmPaths({ HOME: home, HELM_HOME: home });
-  const d = new Daemon({ paths, config: DEFAULT_CONFIG, gh, version: '0', now: () => T0, loops: false, ...(log ? { log } : {}) });
+  const d = new Daemon({ paths, config: DEFAULT_CONFIG, gh, version: '0', now: () => T0, loops: false, ...(opts.log ? { log: opts.log } : {}) });
   await d.start();
   return { d, paths };
 }
@@ -41,6 +41,23 @@ describe('daemon', () => {
     await d.stop();
   });
 
+  it('polls a repository at once when an agent reports on its work', async () => {
+    const asked: string[] = [];
+    const gh = {
+      rates: {},
+      conditional: async (path: string) => {
+        asked.push(path);
+        throw new Error('offline');
+      },
+    } as unknown as GitHub;
+    const { d } = await daemon({ gh });
+    d.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    d.ledger.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'x' }, 'one');
+    d.report({ session: 'A', agent: 'x', repo: 'o/r', issue: 1, state: 'ready' });
+    await vi.waitFor(() => expect(asked.some((p) => p.startsWith('repos/o/r/'))).toBe(true));
+    await d.stop();
+  });
+
   it('still tells the main loop when the answer went to one of its agents', async () => {
     const { d } = await daemon();
     d.register({ id: 'A', cwd: '/', repo: 'o/r' });
@@ -54,7 +71,7 @@ describe('daemon', () => {
 
   it('applies an edited config live and keeps the running one through a broken edit', async () => {
     const log: string[] = [];
-    const { d, paths } = await daemon((line) => log.push(line));
+    const { d, paths } = await daemon({ log: (line) => log.push(line) });
     const file = join(paths.config, 'config.json');
     await mkdir(paths.config, { recursive: true });
     await writeFile(file, JSON.stringify({ routing: { fallback: 'deep' } }));

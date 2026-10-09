@@ -1,6 +1,6 @@
 import { verdictOf } from '../core/checks.ts';
 import { selfWorked } from '../core/work.ts';
-import type { AgentStatus, Decision, ForgeState, Job, LocalState, Phase, Pull, Session, Work, WorkView } from '../core/types.ts';
+import type { AgentStatus, Decision, ForgeState, Issue, Job, LocalState, Phase, Pull, Session, Work, WorkView } from '../core/types.ts';
 
 // the branch conventions an issue's work goes on: feat/12, fix/12, hotfix/12, or any prefix ending in the number
 export function branchFor(issue: number, branch: string): boolean {
@@ -29,12 +29,22 @@ export function agentStatusOf(w: Work, sessions: ReadonlyMap<string, Session>, n
 
 const isLive = (s: Session | undefined) => s !== undefined && !s.gone;
 
-export function phaseOf(w: Work, ctx: { pull?: Pull; agent?: AgentStatus; ownerLive?: boolean; blocking: boolean; issueClosed: boolean }): Phase {
+const SET_ASIDE_LABELS: ReadonlySet<string> = new Set(['blocked', 'parked']);
+
+// an issue set aside on purpose: labelled blocked or parked, or waiting on an open issue it is blocked by
+export function setAside(issue: Issue | undefined): boolean {
+  if (!issue) return false;
+  return (issue.blockedBy ?? 0) > 0 || issue.labels.some((l) => SET_ASIDE_LABELS.has(l.toLowerCase()));
+}
+
+export function phaseOf(w: Work, ctx: { pull?: Pull; agent?: AgentStatus; ownerLive?: boolean; blocking: boolean; issueClosed: boolean; setAside?: boolean }): Phase {
   if (w.finished || ctx.issueClosed || ctx.pull?.state === 'merged') return 'done';
   if (ctx.blocking || w.report?.state === 'blocked') return 'blocked';
   // an agent that ended its turn to wait on a delivery is still on the work, and so is a live session working it itself
   const self = selfWorked(w);
   const active = (ctx.agent !== undefined && LIVE.has(ctx.agent)) || w.report?.state === 'waiting' || (self && ctx.ownerLive === true);
+  // set aside with nobody on it is waiting on purpose, not stalled; someone still on it shows where it stands
+  if (ctx.setAside && !active) return 'parked';
   const pull = ctx.pull?.state === 'open' ? ctx.pull : undefined;
   if (pull) {
     const verdict = verdictOf(pull.checks);
@@ -66,7 +76,7 @@ export function viewOf(
   return {
     ...w,
     ...(issue && w.title !== issue.title ? { title: issue.title } : {}),
-    phase: phaseOf(w, { pull, agent: agentStatus, ownerLive: isLive(w.owner ? sessions.get(w.owner) : undefined), blocking: mine.some((d) => d.blocking), issueClosed: issue?.state === 'closed' }),
+    phase: phaseOf(w, { pull, agent: agentStatus, ownerLive: isLive(w.owner ? sessions.get(w.owner) : undefined), blocking: mine.some((d) => d.blocking), issueClosed: issue?.state === 'closed', setAside: setAside(issue) }),
     ...(agentStatus ? { agentStatus } : {}),
     ...(pull ? { pull: { number: pull.number, url: pull.url, draft: pull.draft, state: pull.state, head: pull.head, sha: pull.sha } } : {}),
     verdict: verdictOf(checks),
