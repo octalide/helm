@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.3
+
+- The web page's Activity view draws its events instead of `[object HTMLElement]`, and every view fills the page through one flattening helper (#39).
+
 ## 0.2.2
 
 - An answer to a decision reaches the session that asked once, not twice (#36).
