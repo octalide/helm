@@ -1,7 +1,7 @@
 import type { AgentRecord, CiFilter, Decision, DecisionKind, Effort, Letter, PlanStep, ReportState, RepoName, Routing, Scope, SessionRole, Tier, Until } from './types.ts';
 
 // bumped when a route or a body changes shape; a mod that finds an older daemon replaces it
-export const PROTOCOL = 1;
+export const PROTOCOL = 2;
 
 export type Health = { version: string; protocol: number; pid: number; startedAt: number; web?: string };
 
@@ -38,7 +38,7 @@ export type ReportBody = {
   note?: string;
   // a question that stops the agent until answered
   question?: { title: string; body: string; options?: string[] };
-  // choices made without the person, logged for review
+  // choices made without the person, recorded for review
   choices?: { title: string; body: string }[];
   // the plan as it stands, every step with whether it is done
   plan?: PlanStep[];
@@ -60,6 +60,8 @@ export type DecisionBody = {
 };
 
 export type AnswerBody = { text: string; option?: string; by: string };
+
+export type EscalateBody = { by: string; note?: string };
 
 export type RoutingConfig = { judge: string; review: number; tiers: Tier[]; fallback: string };
 

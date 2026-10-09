@@ -4,6 +4,7 @@ import type {
   ClaimBody,
   ConfigView,
   DecisionBody,
+  EscalateBody,
   Health,
   IssueDetail,
   OrderBody,
@@ -91,6 +92,7 @@ export class HelmClient {
   order = (b: OrderBody) => this.call<{ ordered: number }>('POST', '/v1/work/order', b);
   decide = (b: DecisionBody) => this.call<Decision>('POST', '/v1/decisions', b);
   answer = (id: string, b: AnswerBody) => this.call<Answered>('POST', `/v1/decisions/${enc(id)}/answer`, b);
+  escalate = (id: string, b: EscalateBody) => this.call<Decision>('POST', `/v1/decisions/${enc(id)}/escalate`, b);
   dismiss = (id: string) => this.call<Decision>('POST', `/v1/decisions/${enc(id)}/dismiss`);
   repo = (repo: RepoName) => this.call<RepoView>('GET', `/v1/repos/${repo}`);
   poll = (repo: RepoName) => this.call<RepoView>('POST', `/v1/repos/${repo}/poll`);

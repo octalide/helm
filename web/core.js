@@ -221,4 +221,16 @@ export function sessionName(s) {
   return s.role === 'coordinator' ? 'coordinator' : s.repo ? repoShort(s.repo) : s.title || s.id.slice(0, 8);
 }
 
+// choices and routing picks are records for review that never wait on anyone; the rest is addressed to the person or to
+// the session owning the work, as src/core/decision.ts has it
+export const RECORDS = new Set(['choice', 'routing']);
+export const isRecord = (d) => RECORDS.has(d.kind);
+export const forYou = (d) => d.state === 'open' && !isRecord(d) && d.to === 'person';
+export const forSessions = (d) => d.state === 'open' && !isRecord(d) && d.to === 'session';
+export const audience = (d, sessions) => {
+  if (d.to === 'person') return 'for you';
+  const s = sessions.find((x) => x.id === d.session);
+  return `for ${s ? `${sessionName(s)}${s.role === 'other' ? '' : ` ${s.role}`}` : (d.session || '').slice(0, 8)} session`;
+};
+
 export const empty = (text, hint) => el('div', { class: 'empty' }, el('div', {}, text), hint ? el('div', { class: 'hint' }, hint) : '');

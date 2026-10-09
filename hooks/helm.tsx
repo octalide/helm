@@ -398,7 +398,7 @@ export const register: Register = (on) => {
     return rowsOf($, e, paneRows(f, selfOf(r), { rows: Math.max(6, (e.viewport?.rows ?? 24) - 2), cols: e.viewport?.columns ?? 80, tab, ...(r.web ? { web: r.web } : {}) }));
   });
 
-  // the pane's controls: a tab, an option that answers a decision, or a dismissal
+  // the pane's controls: a tab, an option that answers a decision, an escalation to the person, or a dismissal
   on('ui.press', async ($, e, next) => {
     if (e.requestId !== PANE) return next(e);
     const r = rt;
@@ -408,6 +408,7 @@ export const register: Register = (on) => {
       const option = fleet?.decisions.find((d) => d.id === id)?.options?.[Number(index)];
       if (option) await r.client.answer(id, { text: '', option, by: 'pane' }).then(() => refresh($, r), (err: Error) => $.ui.log(`helm: answer failed: ${err.message}`, { to: 'debug' }));
     }
+    if (r && id && kind === 'escalate') await r.client.escalate(id, { by: 'pane' }).then(() => refresh($, r), (err: Error) => $.ui.log(`helm: escalate failed: ${err.message}`, { to: 'debug' }));
     if (r && id && kind === 'dismiss') await r.client.dismiss(id).then(() => refresh($, r), (err: Error) => $.ui.log(`helm: dismiss failed: ${err.message}`, { to: 'debug' }));
     return next(e);
   }).catch(($, e, next) => next(e));
