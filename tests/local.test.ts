@@ -1,9 +1,11 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { mergeConfig, DEFAULT_CONFIG } from '../src/core/config.ts';
 import { trimLog } from '../src/daemon/helmd.ts';
 import { repoOfRemote } from '../src/core/repo.ts';
 import { parseBranches, parseStatus, parseWorktrees } from '../src/daemon/local.ts';
-import { daemonAction } from '../src/core/protocol.ts';
+import { daemonAction, PROTOCOL } from '../src/core/protocol.ts';
+import { type Install, installOf, newestInstall } from '../src/mod/install.ts';
 import { leftovers } from '../src/daemon/procs.ts';
 import { table } from './fixtures.ts';
 
@@ -68,5 +70,42 @@ describe('daemon replacement', () => {
     expect(daemonAction({ version: '0.4.0', protocol: 2 }, '0.4.0', 2)).toBe('use');
     expect(daemonAction({ version: '0.5.0', protocol: 2 }, '0.4.0', 2)).toBe('use');
     expect(daemonAction({ version: '0.4.0', protocol: 2 }, '0.3.0', 1)).toBe('reload');
+  });
+});
+
+describe('daemon install', () => {
+  const cache = '/c/plugins/cache/helm/helm';
+  const manifest = (version: string, protocol?: number, name = 'helm') => JSON.stringify({ name, version, ...(protocol === undefined ? {} : { helm: { protocol } }) });
+  const fs = (files: Record<string, string>) => ({
+    dirs: async (path: string) => [...new Set(Object.keys(files).filter((f) => f.startsWith(`${path}/`)).map((f) => f.slice(path.length + 1).split('/')[0]!))],
+    read: async (path: string) => files[path] ?? Promise.reject(new Error('ENOENT')),
+  });
+  const own: Install = { root: `${cache}/0.4.2`, name: 'helm', version: '0.4.2', protocol: 2 };
+
+  it('declares the protocol it speaks in its manifest', () => {
+    expect(installOf('/r', readFileSync(new URL('../package.json', import.meta.url), 'utf8'))?.protocol).toBe(PROTOCOL);
+  });
+
+  it('starts the newest install beside its own that speaks its protocol', async () => {
+    const files = {
+      [`${cache}/0.3.0/package.json`]: manifest('0.3.0'),
+      [`${cache}/0.4.1/package.json`]: manifest('0.4.1'),
+      [`${cache}/0.4.2/package.json`]: manifest('0.4.2', 2),
+      [`${cache}/0.4.10/package.json`]: manifest('0.4.10', 2),
+      [`${cache}/0.4.3/package.json`]: manifest('0.4.3', 2),
+      [`${cache}/0.5.0/package.json`]: manifest('0.5.0', 3),
+      [`${cache}/0.6.0/package.json`]: manifest('0.6.0', 2, 'other'),
+      [`${cache}/0.7.0/package.json`]: '{ half written',
+      [`${cache}/node_modules/x`]: '',
+    };
+    expect(await newestInstall(own, fs(files))).toEqual({ root: `${cache}/0.4.10`, name: 'helm', version: '0.4.10', protocol: 2 });
+    expect(await newestInstall({ ...own, root: `${cache}/0.4.10`, version: '0.4.10' }, fs(files))).toMatchObject({ version: '0.4.10' });
+    expect(await newestInstall(own, fs({ [`${cache}/0.4.1/package.json`]: manifest('0.4.1') }))).toBe(own);
+  });
+
+  it('has only its own root outside the plugin cache', async () => {
+    const dev: Install = { ...own, root: '/src/octalide/helm' };
+    expect(await newestInstall(dev, fs({ '/src/octalide/9.0.0/package.json': manifest('9.0.0', 2) }))).toBe(dev);
+    expect(await newestInstall({ ...own, root: '/0.4.2' }, fs({}))).toMatchObject({ root: '/0.4.2' });
   });
 });
