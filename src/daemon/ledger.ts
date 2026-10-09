@@ -5,7 +5,11 @@ import { inherited, selfWorked } from '../core/work.ts';
 import type { AdoptionRecord, AgentRecord, Answer, Audience, Decision, HelmEvent, Leftover, Letter, Phase, RepoName, Session, SessionRole, Subscription, Work } from '../core/types.ts';
 
 // bumped when the stored shape changes; an older file is migrated or refused, never read as this one
-export const LEDGER_VERSION = 3;
+export const LEDGER_VERSION = 4;
+
+// an issue that opened while helm watched its repository, held until a session owns it, it closes, or the fleet hears
+// that nobody owns it. alone: no live repo session was in its repository when it opened
+export type UnownedIssue = { repo: RepoName; issue: number; openedAt: number; alone: boolean; delivered?: number };
 
 export type LedgerData = {
   version: number;
@@ -17,6 +21,7 @@ export type LedgerData = {
   letters: Record<string, Letter>;
   // the newest events, for the web page's activity feed
   events: HelmEvent[];
+  unowned: Record<string, UnownedIssue>;
 };
 
 // an older file brought up to this shape, in place
@@ -30,6 +35,10 @@ export function migrate(data: LedgerData): LedgerData {
     repairRoles(data);
     recordAdoptions(data);
     data.version = 3;
+  }
+  if (data.version === 3) {
+    data.unowned = {};
+    data.version = 4;
   }
   return data;
 }
@@ -98,6 +107,7 @@ export const emptyLedger = (): LedgerData => ({
   subscriptions: {},
   letters: {},
   events: [],
+  unowned: {},
 });
 
 const EVENT_LOG = 300;
@@ -709,6 +719,28 @@ export class Ledger {
     this.changed();
   }
 
+  // an issue newly opened in a watched repository, once: a later sighting of the same issue changes nothing
+  opened(repo: RepoName, issue: number, openedAt: number, alone: boolean): void {
+    const key = workKey(repo, issue);
+    if (this.data.unowned[key]) return;
+    this.data.unowned[key] = { repo, issue, openedAt, alone };
+    this.changed();
+  }
+
+  // the opened issues not yet delivered as unowned
+  unownedWaiting(): UnownedIssue[] {
+    return Object.values(this.data.unowned).filter((u) => u.delivered === undefined);
+  }
+
+  // a waiting issue settled: delivered, and remembered so it never is again, or let go as owned or closed
+  settleUnowned(key: string, delivered: boolean): void {
+    const u = this.data.unowned[key];
+    if (!u || u.delivered !== undefined) return;
+    if (delivered) u.delivered = this.now();
+    else delete this.data.unowned[key];
+    this.changed();
+  }
+
   live(session: string): boolean {
     const s = this.data.sessions[session];
     return s !== undefined && !s.gone;
@@ -736,6 +768,8 @@ export class Ledger {
     }
     for (const [k, w] of Object.entries(this.data.work)) if (w.finished && now - w.finished.at > WORK_KEEP_MS) drop(this.data.work, k);
     for (const [k, d] of Object.entries(this.data.decisions)) if (d.state !== 'open' && now - d.updatedAt > DECISION_KEEP_MS) drop(this.data.decisions, k);
+    // long past any sighting as newly opened, which could deliver it again
+    for (const [k, u] of Object.entries(this.data.unowned)) if (u.delivered !== undefined && now - u.delivered > WORK_KEEP_MS) drop(this.data.unowned, k);
     if (newlyGone.length || dropped) this.changed();
     return newlyGone;
   }

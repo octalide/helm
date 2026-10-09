@@ -184,7 +184,7 @@ export const TOOLS: Tool[] = [
         ci: { type: 'string', enum: ['settled', 'failures', 'all', 'none'] },
         until: { type: 'string', description: 'settled, merged, closed or an ISO time' },
         sha: { type: 'string', description: 'pr scope: the head you pushed, so a verdict on an older head is not taken for yours' },
-        tags: { type: 'array', items: { type: 'string' }, description: 'item events to take: opened, closed, reopened, merged, ready, draft, comment, review, pushed, edited, labeled' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'item events to take: opened, closed, reopened, merged, ready, draft, comment, review, pushed, edited, labeled, unowned' },
         bots: { type: 'boolean', description: 'take events from bot accounts too' },
         id: { type: 'string', description: 'unsubscribe: the subscription id' },
       },

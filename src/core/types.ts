@@ -379,7 +379,7 @@ export type HelmEvent = {
   sha?: string;
   tag?: string;
   // tags a filter reads: opened, closed, merged, comment, review, ready, draft, edited, labeled, settled, stalled,
-  // completed, success, failure, phase, decision, answered, progress, complete, leftovers
+  // completed, success, failure, phase, decision, answered, progress, complete, leftovers, unowned
   tags: string[];
   author?: Author;
   // one line, then detail lines
