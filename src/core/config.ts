@@ -83,9 +83,10 @@ export function mergeConfig(base: Config, ...layers: unknown[]): Config {
       routing: { ...out.routing, ...layer.routing },
     };
   }
-  const fallback = out.routing.tiers.find((t) => t.name === out.routing.fallback) ?? out.routing.tiers[0];
-  if (!fallback) throw new Error('routing.tiers is empty');
-  return { ...out, routing: { ...out.routing, fallback: fallback.name } };
+  const { tiers, fallback } = out.routing;
+  if (!tiers.length) throw new Error('routing.tiers is empty');
+  if (!tiers.some((t) => t.name === fallback)) throw new Error(`routing.fallback ${JSON.stringify(fallback)} names no tier; the tiers are ${tiers.map((t) => t.name).join(', ')}`);
+  return out;
 }
 
 // a repository's own .helm/config.json may only change routing: what is polled and where is the machine's

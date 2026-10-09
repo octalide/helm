@@ -28,7 +28,8 @@ export function routingPrompt(issue: IssueDetail, tiers: readonly Tier[]): strin
 
 // the judge's answer as a routing; anything it got wrong falls back to the configured tier, at no confidence
 export function parseRouting(text: string, cfg: RoutingConfig, now: number): Routing {
-  const fallback = cfg.tiers.find((t) => t.name === cfg.fallback) ?? cfg.tiers[0]!;
+  // the config refuses a fallback that names no tier, so this always finds one
+  const fallback = cfg.tiers.find((t) => t.name === cfg.fallback)!;
   const json = /\{[\s\S]*\}/.exec(text)?.[0];
   let raw: { tier?: unknown; confidence?: unknown; reason?: unknown } = {};
   try {
