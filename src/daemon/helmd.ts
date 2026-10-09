@@ -16,7 +16,7 @@ import { pullFor, viewOf } from './derive.ts';
 import { verdictEvent } from './events.ts';
 import { epicEvents, rootsOf } from './epics.ts';
 import type { GitHub } from './github.ts';
-import { emptyLedger, Ledger, type LedgerData } from './ledger.ts';
+import { type Adoption, emptyLedger, Ledger, type LedgerData } from './ledger.ts';
 import { discover, type Git, git as realGit, scan } from './local.ts';
 import { readJson, Saver, writeJson } from './persist.ts';
 import { leftovers, type ProcTable, procfs, still } from './procs.ts';
@@ -310,6 +310,7 @@ export class Daemon {
     const gone = this.ledger.sweep(this.config.poll.goneSeconds * 1000);
     for (const s of gone) {
       this.log(`session ${s.id} went quiet`);
+      this.succeed(s);
       this.orphan(s.id);
     }
     const now = this.now();
@@ -385,10 +386,11 @@ export class Daemon {
     }
   }
 
-  // a letter for an agent that reported stopped goes to its session's main loop, since sending it would resume the agent
+  // a letter for an agent that reported stopped goes to its session's main loop, since sending it would resume the
+  // agent, and so does one for an agent gone with the session its work was adopted from
   private post(l: Omit<Letter, 'id' | 'at'>): void {
-    const w = l.agent !== undefined ? this.ledger.stopped(l.session, l.agent) : undefined;
-    this.send(this.ledger.post(w ? heldFor(l, w) : l));
+    const held = l.agent !== undefined ? this.ledger.held(l.session, l.agent) : undefined;
+    this.send(this.ledger.post(held ? heldFor(l, held.work, held.why) : l));
   }
 
   private send(letter: Letter): void {
@@ -552,7 +554,37 @@ export class Daemon {
   register(b: RegisterBody): Session {
     const s = this.ledger.register(b);
     if (s.repo) this.asked.set(s.repo, this.now());
+    this.adopted(this.ledger.adopt(s.id, b.from));
     return s;
+  }
+
+  // a repo session gone or ended leaves what it held to the one live repo session of its repository, when there is one
+  private succeed(gone: Session): void {
+    if (gone.role !== 'repo' || !gone.repo) return;
+    for (const s of Object.values(this.ledger.data.sessions)) {
+      if (s.id !== gone.id && !s.gone && s.role === 'repo' && s.repo === gone.repo) this.adopted(this.ledger.adopt(s.id));
+    }
+  }
+
+  // an adoption told to the session that took it, as one delivery, and to whoever else watches the fleet
+  private adopted(a: Adoption | undefined): void {
+    if (!a) return;
+    const s = this.ledger.data.sessions[a.session];
+    const views = new Map(this.workViews().map((v) => [workKey(v.repo, v.issue), v]));
+    const lines = adoptionLines(a, views);
+    this.log(`session ${a.session} adopted ${a.work.length} work items from ${a.from.join(', ')}`);
+    this.post({ session: a.session, text: letterText([{ head: 'adopted', lines }]), parts: [{ head: 'adopted', lines }], events: [], subs: [] });
+    const event: HelmEvent = {
+      id: `work:adopted:${a.session}@${this.now()}`,
+      kind: 'work',
+      ...(s?.repo ? { repo: s.repo } : {}),
+      at: this.now(),
+      tags: ['adopted'],
+      text: lines[0]!,
+      detail: lines.slice(1),
+      owner: a.session,
+    };
+    this.dispatch([event], { except: { session: a.session } });
   }
 
   heartbeat(id: string, agents: AgentRecord[]): Session | undefined {
@@ -607,7 +639,9 @@ export class Daemon {
   }
 
   setRole(id: string, role: SessionRole, repo?: RepoName): Session | undefined {
-    return this.ledger.setRole(id, role, repo);
+    const s = this.ledger.setRole(id, role, repo);
+    if (s) this.adopted(this.ledger.adopt(s.id));
+    return s;
   }
 
   // a new subscription polls its repository, and one on a pr whose head ci has already settled hears that verdict
@@ -753,6 +787,8 @@ export class Daemon {
 
   endSession(id: string): void {
     this.ledger.endSession(id);
+    const s = this.ledger.data.sessions[id];
+    if (s) this.succeed(s);
     this.orphan(id);
   }
 
@@ -782,10 +818,13 @@ export class Daemon {
     return d.repo && d.issue !== undefined ? this.ledger.data.work[workKey(d.repo, d.issue)]?.owner : undefined;
   }
 
-  // the answer goes to whoever is waiting on it: the agent that asked, else its session, else the work's owner
+  // the answer goes to whoever is waiting on it: the agent that asked, else its session, else the work's owner, which
+  // is also who took the work over once the asker's session is gone
   answer(id: string, b: AnswerBody): Answered {
     const d = this.ledger.answer(id, b);
-    const recipient = d.kind === 'routing' ? (this.ownerOf(d) ? { session: this.ownerOf(d)! } : undefined) : (d.from ?? (this.ownerOf(d) ? { session: this.ownerOf(d)! } : undefined));
+    const holder = this.ownerOf(d);
+    const asker = d.kind !== 'routing' && d.from && (this.ledger.live(d.from.session) || !holder) ? d.from : undefined;
+    const recipient = asker ?? (holder ? { session: holder } : undefined);
     const lines = [`[helm decision ${d.id} answered by ${b.by}] ${d.title}`];
     if (b.option) lines.push(`choice: ${b.option}`);
     if (b.text) lines.push(b.text);
@@ -893,12 +932,39 @@ export class Daemon {
 // the engine statuses of an agent whose loop is still going
 const LOOPING: ReadonlySet<string> = new Set(['pending', 'running', 'waiting']);
 
-// a stopped agent's letter readdressed to its session's main loop, led by whose it was
-function heldFor(l: Omit<Letter, 'id' | 'at'>, w: Work): Omit<Letter, 'id' | 'at'> {
+// a held agent's letter readdressed to its session's main loop, led by whose it was
+function heldFor(l: Omit<Letter, 'id' | 'at'>, w: Work, why: 'stopped' | 'inherited'): Omit<Letter, 'id' | 'at'> {
   const { agent, ...rest } = l;
-  const note: LetterPart = { lines: [`[helm held for agent ${agent}] it reported stopped on ${workKey(w.repo, w.issue)}, so this is yours, not sent to it: dispatch the issue again or message the agent to pick the work back up`] };
+  const key = workKey(w.repo, w.issue);
+  const note: LetterPart = {
+    lines: [
+      why === 'stopped'
+        ? `[helm held for agent ${agent}] it reported stopped on ${key}, so this is yours, not sent to it: dispatch the issue again or message the agent to pick the work back up`
+        : `[helm held for agent ${agent}] it is gone with session ${w.adopted?.from ?? '?'}, whose ${key} this session took over, so this is yours: dispatch the issue again to pick the work back up`,
+    ],
+  };
   const parts = [note, ...(l.parts ?? [{ lines: [l.text] }])];
   return { ...rest, parts, text: letterText(parts) };
+}
+
+// what an adoption took, what of it has no worker and so waits on a dispatch, and what else came with it
+function adoptionLines(a: Adoption, views: ReadonlyMap<string, WorkView>): string[] {
+  const phase = (w: Work) => views.get(workKey(w.repo, w.issue))?.phase ?? 'queued';
+  const redispatch = a.work.filter((w) => w.agent !== undefined || (phase(w) !== 'queued' && phase(w) !== 'parked'));
+  const queued = a.work.filter((w) => !redispatch.includes(w));
+  const pr = (w: Work) => views.get(workKey(w.repo, w.issue))?.pull;
+  return [
+    `this session took over the unfinished work of gone session${a.from.length === 1 ? '' : 's'} ${a.from.join(', ')}: ${a.work.length} item${a.work.length === 1 ? '' : 's'}, backlog order kept`,
+    ...(redispatch.length
+      ? [
+          `to dispatch again, their agent gone with its session (the new agent resumes the branch and pr):`,
+          ...redispatch.map((w) => `  ${workKey(w.repo, w.issue)} ${phase(w)}${w.agent ? ` · agent ${w.agent}` : ''}${pr(w) ? ` · pr #${pr(w)!.number}` : ''}${w.report ? ` · last report ${w.report.state}` : ''}: ${w.title}`),
+        ]
+      : []),
+    ...(queued.length ? [`the rest, in backlog order: ${queued.map((w) => workKey(w.repo, w.issue)).join(' ')}`] : []),
+    ...(a.decisions.length ? [`decisions now addressed to this session: ${a.decisions.map((d) => `${d.id} (${d.kind}${d.issue !== undefined ? ` #${d.issue}` : ''})`).join(', ')}`] : []),
+    ...(a.subscriptions.length ? [`subscriptions now this session's: ${a.subscriptions.join(' ')}`] : []),
+  ];
 }
 
 // what a stall stands for: the agent that left it and where its pr was, so a new head, agent or pr state is news
