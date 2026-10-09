@@ -57,6 +57,8 @@ export type Pull = {
   author: Author;
   head: string;
   sha: string;
+  // the head branch lives in a fork, so this machine's origin/<head> is not it
+  fork?: boolean;
   base: string;
   closes: number[];
   review?: string;

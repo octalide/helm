@@ -134,6 +134,7 @@ export class Ledger {
       ...(spans ? {} : { repo: b.repo }),
       ...(b.tags ? { tags: b.tags } : {}),
       ...(b.until !== undefined ? { until: b.until } : {}),
+      ...(b.sha && b.scope.kind === 'pr' ? { head: b.sha } : {}),
       ...(b.agent ? { agent: b.agent } : {}),
     };
     this.data.subscriptions[id] = sub;

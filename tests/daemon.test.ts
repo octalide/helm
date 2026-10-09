@@ -8,6 +8,8 @@ import type { GitHub } from '../src/daemon/github.ts';
 import { Daemon } from '../src/daemon/helmd.ts';
 import type { Git } from '../src/daemon/local.ts';
 import { emptyCache } from '../src/daemon/poller.ts';
+import { behindKey } from '../src/daemon/watch.ts';
+import type { HelmEvent } from '../src/core/types.ts';
 import { check, forge, pull, T0 } from './fixtures.ts';
 
 const dirs: string[] = [];
@@ -73,35 +75,55 @@ describe('daemon', () => {
     await d.stop();
   });
 
-  it('catches a subscriber up only on the head it waits on, not one the forge still shows from before a push', async () => {
-    const [old, pushed] = ['a'.repeat(40), 'c'.repeat(40)];
+  it('holds back ci on a head the subscriber has pushed past, and only that', async () => {
+    // history runs stale -> old -> pushed, and other shares none of it
+    const [stale, old, pushed, other] = ['b', 'a', 'c', 'd'].map((c) => c.repeat(40)) as [string, string, string, string];
+    const history = [stale, old, pushed];
     const offline = { rates: {}, conditional: async () => Promise.reject(new Error('offline')) } as unknown as GitHub;
     let remote = pushed;
     const git: Git = async (_cwd, args) => {
       if (args[0] === 'config') return 'git@github.com:o/r.git\n';
-      if (args[0] === 'for-each-ref' && args.at(-1) === 'refs/remotes/origin/feat/50') return `refs/remotes/origin/feat/50\t${remote}\t1\n`;
+      if (args[0] === 'for-each-ref' && args.at(-1)?.startsWith('refs/remotes/origin/')) return `${args.at(-1)}\t${remote}\t1\n`;
+      if (args[0] === 'merge-base') {
+        const [a, b] = [history.findIndex((h) => h.startsWith(args[2]!)), history.findIndex((h) => h.startsWith(args[3]!))];
+        if (a < 0 || b < 0 || a > b) throw new Error('not an ancestor');
+      }
       return '';
     };
+    const green = [check('test', 'success')];
     const { d } = await daemon({
       gh: offline,
       git,
       setup: async (home, paths) => {
         await mkdir(join(home, 'src', 'r', '.git'), { recursive: true });
         await mkdir(paths.repos, { recursive: true });
-        const settled = forge({ pulls: [pull(150, { sha: old, checks: [check('test', 'success')] })] });
+        const settled = forge({ pulls: [pull(150, { sha: old, checks: green }), pull(151, { sha: old, checks: green, fork: true })] });
         await writeFile(join(paths.repos, 'o__r.json'), JSON.stringify({ ...emptyCache(), forge: settled }));
       },
     });
     d.register({ id: 'A', cwd: '/', repo: 'o/r' });
-    const wait = (agent: string, sha?: string) => d.subscribe({ session: 'A', agent, repo: 'o/r', scope: { kind: 'pr', number: 150 }, ci: 'settled', until: 'settled', ...(sha ? { sha } : {}) });
+    const wait = (agent: string, sha?: string, number = 150) => d.subscribe({ session: 'A', agent, repo: 'o/r', scope: { kind: 'pr', number }, ci: 'settled', until: 'settled', ...(sha ? { sha } : {}) });
     const caught = (agent: string) => lettersFor(d, 'A', agent).some((l) => l.text.includes('ci settled success'));
-    await wait('behind');
+
+    // the forge still shows old, the push made pushed: held back, from the local ref or a named sha
+    expect((await wait('behind')).head).toBe(pushed);
     await wait('named', pushed.slice(0, 7));
-    expect([caught('behind'), caught('named')]).toEqual([false, false]);
+    // a fork's origin/<head> is some other branch: no guess
+    expect((await wait('fork', undefined, 151)).head).toBeUndefined();
     await wait('wins', old.slice(0, 7));
     remote = old;
     await wait('caught');
-    expect([caught('wins'), caught('caught')]).toEqual([true, true]);
+    // a local ref fetched long ago, or one the forge head does not descend from, says nothing
+    remote = stale;
+    await wait('fetched long ago');
+    remote = other;
+    await wait('unrelated');
+    expect(Object.fromEntries(['behind', 'named', 'fork', 'wins', 'caught', 'fetched long ago', 'unrelated'].map((a) => [a, caught(a)]))).toEqual({ behind: false, named: false, fork: true, wins: true, caught: true, 'fetched long ago': true, unrelated: true });
+
+    // live: ci on a head behind the expected one is held back, on that head or past it it goes through
+    const live = (sha: string) => ({ id: `ci:${sha}`, kind: 'ci' as const, repo: 'o/r', at: T0, pr: 150, sha, tags: ['settled', 'success'], text: `ci settled success @${sha.slice(0, 7)}` });
+    const held = (await (d as unknown as { staleHeads: (r: string, e: HelmEvent[]) => Promise<Set<string>> }).staleHeads('o/r', [live(old), live(pushed), live(other)]));
+    expect([...held]).toEqual([behindKey(old, pushed), behindKey(old, pushed.slice(0, 7))]);
     await d.stop();
   });
 

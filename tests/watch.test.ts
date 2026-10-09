@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { route } from '../src/daemon/deliver.ts';
-import { ended, globMatch, matches, retiredBy } from '../src/daemon/watch.ts';
+import { behindKey, ended, globMatch, matches, retiredBy } from '../src/daemon/watch.ts';
 import { forge, issue, pull } from './fixtures.ts';
 import type { HelmEvent, Subscription } from '../src/core/types.ts';
 
@@ -30,6 +30,16 @@ describe('matches', () => {
     const e = ev({ kind: 'ci', pr: 1, tags: ['settled', 'success'] });
     expect(matches(e, s, ctx)).toBe(true);
     expect(retiredBy(e, s)).toBe(true);
+  });
+
+  it('holds back ci on a head a pr subscription has pushed past', () => {
+    const s = sub({ scope: { kind: 'pr', number: 1 }, ci: 'settled', until: 'settled', head: 'c'.repeat(40) });
+    const on = (sha: string) => ev({ kind: 'ci', pr: 1, sha, tags: ['settled', 'success'] });
+    const behind = { ...ctx, behind: new Set([behindKey('a'.repeat(40), 'c'.repeat(40))]) };
+    expect(matches(on('a'.repeat(40)), s, behind)).toBe(false);
+    expect(matches(on('c'.repeat(40)), s, behind)).toBe(true);
+    expect(matches(on('d'.repeat(40)), s, behind)).toBe(true);
+    expect(matches(on('a'.repeat(40)), sub({ scope: { kind: 'pr', number: 1 }, ci: 'settled' }), behind)).toBe(true);
   });
 
   it('hears failed runs on a whole repository only on long-lived branches', () => {

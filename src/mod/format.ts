@@ -115,7 +115,7 @@ export function sessionLine(s: Session, now: number, self?: string): string {
 }
 
 export function subscriptionLine(s: Subscription, describe: (s: Subscription) => string): string {
-  return `${s.id} ${describe(s)} · ci ${s.ci}${s.tags ? ` · tags ${s.tags.join(',')}` : ''}${s.until ? ` · until ${typeof s.until === 'object' ? s.until.at : s.until}` : ''}${s.agent ? ` · for agent ${s.agent}` : ''}`;
+  return `${s.id} ${describe(s)} · ci ${s.ci}${s.tags ? ` · tags ${s.tags.join(',')}` : ''}${s.until ? ` · until ${typeof s.until === 'object' ? s.until.at : s.until}` : ''}${s.head ? ` · head ${s.head.slice(0, 7)}` : ''}${s.agent ? ` · for agent ${s.agent}` : ''}`;
 }
 
 export function forgeBlock(what: 'issues' | 'prs' | 'runs', f: ForgeState | undefined, now: number, label?: string): string {
