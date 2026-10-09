@@ -424,6 +424,7 @@ export class Daemon {
         at: this.now(),
         tags: ['phase', v.phase],
         text: `${key} ${was ?? 'new'} → ${v.phase}: ${v.title}`,
+        phase: { from: was ?? 'new', to: v.phase, title: v.title },
         detail: [
           [v.agent ? `agent ${v.agent} (${v.agentStatus ?? '?'})` : selfWorked(v) ? 'worked by its session' : 'no agent', v.routing ? `${v.routing.model}/${v.routing.effort}` : '', v.pull ? `pr #${v.pull.number}` : '', v.verdict !== 'none' ? `ci ${v.verdict}` : '']
             .filter(Boolean)
@@ -614,7 +615,7 @@ export class Daemon {
       }
     }
     const live = recipient && this.ledger.live(recipient.session);
-    if (recipient && live) this.send(this.ledger.post({ session: recipient.session, ...(recipient.agent ? { agent: recipient.agent } : {}), text: lines.join('\n'), events: [], subs: [] }));
+    if (recipient && live) this.send(this.ledger.post({ session: recipient.session, ...(recipient.agent ? { agent: recipient.agent } : {}), text: lines.join('\n'), parts: [{ lines }], events: [], subs: [] }));
     const owner = recipient?.session;
     const event: HelmEvent = {
       id: `decision:${d.id}:answered@${this.now()}`,

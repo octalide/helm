@@ -69,6 +69,12 @@ describe('route', () => {
     expect(letters[1]?.text.split('\n')[0]).toBe('[helm o/r]');
     expect(retired).toEqual(['s2']);
   });
+
+  it('folds a work item\'s phases in one batch into one line', () => {
+    const work = (from: 'new' | 'working', to: 'working' | 'draft') => ev({ id: to, kind: 'work', issue: 1, tags: ['phase', to], text: '', url: 'u', owner: 'S', phase: { from, to, title: 't' } });
+    const { letters } = route([work('new', 'working'), work('working', 'draft')], [sub({ scope: { kind: 'work' } })], ctx, 0);
+    expect(letters[0]?.text).toBe('[helm work]\no/r#1 new → working → draft: t\n  u · s1');
+  });
 });
 
 describe('ended', () => {

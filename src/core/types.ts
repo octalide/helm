@@ -353,6 +353,16 @@ export type HelmEvent = {
   owner?: string;
   // the root epic a work event rolls up into, whose progress event speaks for it on the fleet scope
   epic?: string;
+  // a work event's phase change, which a later one of the same item supersedes
+  phase?: { from: Phase | 'new'; to: Phase; title: string };
+};
+
+// one event of a letter: the group it is listed under, [helm <head>], absent for a letter of its own words; its
+// lines; and for a phase change, the item and the phases it went through, which a newer part of the item extends
+export type LetterPart = {
+  head?: string;
+  lines: string[];
+  phase?: { key: string; path: string[]; title: string };
 };
 
 // one delivery to a session, or to one agent of it
@@ -360,7 +370,10 @@ export type Letter = {
   id: string;
   session: string;
   agent?: string;
+  // the parts rendered whole, what a reader without the parts shows
   text: string;
+  // absent on a letter posted before letters carried parts
+  parts?: LetterPart[];
   events: string[];
   subs: string[];
   at: number;
