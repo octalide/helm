@@ -69,6 +69,7 @@ function lock(paths: HelmPaths): () => void {
 async function serve(paths: HelmPaths): Promise<void> {
   await mkdir(dirname(paths.socket), { recursive: true, mode: 0o700 });
   await mkdir(paths.state, { recursive: true });
+  await mkdir(dirname(paths.lock), { recursive: true, mode: 0o700 });
   const release = lock(paths);
   const log = (line: string) => process.stderr.write(`${new Date().toISOString()} ${line}\n`);
   const config = await readConfig(paths);
