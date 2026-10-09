@@ -263,6 +263,7 @@ export class Ledger {
     const key = workKey(b.repo, b.issue);
     const w = this.data.work[key];
     if (!w) throw new Error(`${key} is not in the ledger: claim it first`);
+    if (b.agent && w.agent && b.agent !== w.agent) throw new ClaimError(`${key} has moved on: agent ${w.agent} holds it, not ${b.agent}`, w.owner ?? b.session);
     const now = this.now();
     w.report = { state: b.state, at: now, ...(b.note ? { note: b.note } : {}) };
     if (b.agent && !w.agent) w.agent = b.agent;
