@@ -225,6 +225,8 @@ export type Work = {
   claimedAt?: number;
   updatedAt: number;
   finished?: { at: number; how: 'merged' | 'closed' | 'abandoned' };
+  // taken over from a gone session; agent is the one it had then, gone with that session and so never resumed
+  adopted?: { from: string; at: number; agent?: string };
 };
 
 // parked: set aside on purpose, by a stopped report or, with nobody on it, a blocked or parked label or an open blocked-by

@@ -109,6 +109,56 @@ describe('ledger', () => {
     expect(l.raise('stall:work:o/r#1', 'c', { kind: 'stall', repo: 'o/r', issue: 1, title: 's', body: '', blocking: false })!.to).toBe('person');
   });
 
+  it('hands a gone repo session\'s unfinished work, subscriptions and decisions to its repository\'s new one, in backlog order', () => {
+    const { l, tick } = ledger();
+    l.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    l.queue({ session: 'A', repo: 'o/r', issues: [3, 1] }, () => undefined);
+    l.claim({ session: 'A', repo: 'o/r', issue: 2, agent: 'x' }, 'two');
+    l.claim({ session: 'A', repo: 'o/r', issue: 9 }, 'nine');
+    l.finish('o/r', 9, 'merged');
+    const pr = l.subscribe({ session: 'A', agent: 'x', repo: 'o/r', scope: { kind: 'pr', number: 7 } });
+    const q = l.report({ session: 'A', agent: 'x', repo: 'o/r', issue: 2, state: 'blocked', question: { title: 'q', body: '' } }).decisions[0]!;
+    const own = l.decide({ kind: 'question', repo: 'o/r', issue: 2, title: 'mine', body: '', blocking: true, from: { session: 'A', agent: 'x' } });
+    l.escalate(own.id, 'session A');
+    tick(200_000);
+    l.sweep(120_000);
+    l.orphaned('A');
+    l.register({ id: 'C', cwd: '/', role: 'coordinator', repo: 'o/r' });
+    expect(l.adopt('C')).toBeUndefined();
+    l.register({ id: 'B', cwd: '/', repo: 'o/r' });
+    const a = l.adopt('B')!;
+    expect(a.from).toEqual(['A']);
+    expect(a.work.map((w) => [w.issue, w.owner, w.order, w.adopted?.from])).toEqual([
+      [3, 'B', 1, 'A'],
+      [1, 'B', 2, 'A'],
+      [2, 'B', 3, 'A'],
+    ]);
+    expect(l.data.work['o/r#2']!.adopted?.agent).toBe('x');
+    expect(l.data.work['o/r#9']!.owner).toBe('A');
+    expect(a.subscriptions).toEqual([pr.id]);
+    expect(l.data.subscriptions[pr.id]).toMatchObject({ session: 'B', agent: 'x' });
+    // the question helm handed to the person once A was gone is B's now; the one A escalated itself stays the person's
+    expect(a.decisions.map((d) => d.id)).toEqual([q.id]);
+    expect([q.to, q.session, q.escalated, own.to]).toEqual(['session', 'B', undefined, 'person']);
+    expect(l.held('B', 'x')?.why).toBe('inherited');
+    // a new agent on the work takes up what the gone one waited on
+    l.claim({ session: 'B', repo: 'o/r', issue: 2, agent: 'y' }, 'two');
+    expect([l.data.subscriptions[pr.id]?.agent, l.held('B', 'y')]).toEqual(['y', undefined]);
+    expect(l.adopt('B')).toBeUndefined();
+  });
+
+  it('takes nothing from a live session, and hands an ended one over exactly to the one it went on as', () => {
+    const { l } = ledger();
+    l.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    l.queue({ session: 'A', repo: 'o/r', issues: [1] }, () => undefined);
+    l.register({ id: 'B', cwd: '/', repo: 'o/r' });
+    expect(l.adopt('B')).toBeUndefined();
+    expect(l.data.work['o/r#1']!.owner).toBe('A');
+    l.register({ id: 'A2', cwd: '/', repo: 'o/r' });
+    expect(l.adopt('A2', 'A')!.work.map((w) => [w.issue, w.owner])).toEqual([[1, 'A2']]);
+    expect(l.live('A')).toBe(false);
+  });
+
   it('reads a version 1 ledger, leaving its decisions with the person', () => {
     const old = { ...emptyLedger(), version: 1, decisions: { d1: { id: 'd1', kind: 'question', title: 'q', body: '', blocking: true, state: 'open', createdAt: T0, updatedAt: T0 } } } as unknown as LedgerData;
     const l = new Ledger(old, () => T0);

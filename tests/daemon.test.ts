@@ -269,6 +269,36 @@ describe('daemon', () => {
     await d.stop();
   });
 
+  it('announces what a repository\'s new session took over from its gone one, once that one is gone', async () => {
+    const { d } = await daemon();
+    const internals = d as unknown as { dispatch: (e: HelmEvent[]) => void };
+    d.register({ id: 'C', cwd: '/', role: 'coordinator' });
+    d.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    d.queue({ session: 'A', repo: 'o/r', issues: [1, 2] });
+    d.ledger.claim({ session: 'A', repo: 'o/r', issue: 3, agent: 'x' }, 'three');
+    d.ledger.subscribe({ session: 'A', agent: 'x', repo: 'o/r', scope: { kind: 'pr', number: 101 }, ci: 'settled' });
+    d.register({ id: 'B', cwd: '/', repo: 'o/r' });
+    expect([lettersFor(d, 'B').length, d.ledger.data.work['o/r#1']!.owner]).toEqual([0, 'A']);
+
+    d.endSession('A');
+    const told = lettersFor(d, 'B');
+    expect(told.length).toBe(1);
+    expect(told[0]!.text.split('\n')).toEqual([
+      '[helm adopted]',
+      'this session took over the unfinished work of gone session A: 3 items, backlog order kept',
+      'to dispatch again, their agent gone with its session (the new agent resumes the branch and pr):',
+      '  o/r#3 stalled · agent x: three',
+      'the rest, in backlog order: o/r#1 o/r#2',
+      expect.stringMatching(/^subscriptions now this session's: s\d+$/),
+    ]);
+    expect(lettersFor(d, 'C').some((l) => l.text.includes('took over the unfinished work of gone session A'))).toBe(true);
+    // what the gone agent's subscription takes is the new session's to act on
+    internals.dispatch([{ id: 'ci:1', kind: 'ci', repo: 'o/r', at: T0, pr: 101, sha: 'a'.repeat(40), tags: ['settled', 'success'], text: 'ci settled success' }]);
+    expect(lettersFor(d, 'B', 'x')).toEqual([]);
+    expect(lettersFor(d, 'B').at(-1)!.text).toMatch(/^\[helm held for agent x\] it is gone with session A, whose o\/r#3 this session took over/);
+    await d.stop();
+  });
+
   it('applies an edited config live and keeps the running one through a broken edit', async () => {
     const log: string[] = [];
     const { d, paths } = await daemon({ log: (line) => log.push(line) });

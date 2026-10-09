@@ -15,7 +15,8 @@ export function daemonAction(up: Pick<Health, 'version' | 'protocol'> | undefine
   return 'use';
 }
 
-export type RegisterBody = { id: string; cwd: string; role?: SessionRole; repo?: RepoName; title?: string };
+// from: the session this one goes on from in the same process, as a /clear or a resume ended it
+export type RegisterBody = { id: string; cwd: string; role?: SessionRole; repo?: RepoName; title?: string; from?: string };
 
 export type HeartbeatBody = { agents: AgentRecord[] };
 
