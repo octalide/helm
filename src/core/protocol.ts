@@ -1,9 +1,19 @@
+import { compareVersions } from './repo.ts';
 import type { AgentRecord, CiFilter, Decision, DecisionKind, Effort, Letter, PlanStep, ReportState, RepoName, Routing, Scope, SessionRole, Tier, Until } from './types.ts';
 
 // bumped when a route or a body changes shape; a mod that finds an older daemon replaces it
 export const PROTOCOL = 2;
 
 export type Health = { version: string; protocol: number; pid: number; startedAt: number; web?: string };
+
+// what a mod does about the helmd it finds: start one, replace an older one, use one as new or newer, or, when that one
+// speaks a newer protocol, wait for this session to reload onto a mod that speaks it. a newer helmd is never replaced
+export function daemonAction(up: Pick<Health, 'version' | 'protocol'> | undefined, version: string, protocol = PROTOCOL): 'start' | 'restart' | 'use' | 'reload' {
+  if (!up) return 'start';
+  if (up.protocol > protocol) return 'reload';
+  if (up.protocol < protocol || compareVersions(up.version, version) < 0) return 'restart';
+  return 'use';
+}
 
 export type RegisterBody = { id: string; cwd: string; role?: SessionRole; repo?: RepoName; title?: string };
 

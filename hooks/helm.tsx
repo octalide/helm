@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code';
 import type { EngineInterface, Register } from 'claude-code';
 import { helmPaths, type PathEnv } from '../src/core/paths.ts';
-import { PROTOCOL, type StreamFrame } from '../src/core/protocol.ts';
-import { compareVersions, isRepoName, repoOfRemote } from '../src/core/repo.ts';
+import { daemonAction, PROTOCOL, type StreamFrame } from '../src/core/protocol.ts';
+import { isRepoName, repoOfRemote } from '../src/core/repo.ts';
 import type { AgentRecord, AgentStatus, Effort, Fleet, RepoName, SessionRole } from '../src/core/types.ts';
 import { HelmClient, HelmError } from '../src/mod/client.ts';
 import { type DispatchPort, dispatchTool, issueAgentName } from '../src/mod/dispatch.ts';
@@ -66,11 +66,18 @@ function daemonArgv($: $, cmd: string, ...rest: string[]): string[] {
   return ['node', '--disable-warning=ExperimentalWarning', `${$.plugin.root}/src/daemon/main.ts`, cmd, ...rest];
 }
 
+let reloadSaid = false;
+
 // helmd answering at this mod's version or newer; an older one is replaced, a newer one is used as it is
 async function ensureDaemon($: $, client: HelmClient, version: string): Promise<void> {
   const up = await client.health().catch(() => undefined);
-  if (up && up.protocol === PROTOCOL && compareVersions(up.version, version) >= 0) return;
-  const cmd = up ? 'restart' : 'start';
+  const cmd = daemonAction(up, version);
+  if (cmd === 'use') return;
+  if (cmd === 'reload') {
+    if (!reloadSaid) $.ui.log(`helm: helmd ${up?.version} speaks protocol ${up?.protocol}, newer than this session's mod (${PROTOCOL}): run /reload-plugins`);
+    reloadSaid = true;
+    return;
+  }
   const r = await $.process.run(daemonArgv($, cmd), { timeoutMs: 30_000 });
   if (r.exitCode !== 0) throw new Error(`helmd ${cmd} failed: ${(r.stderr || r.stdout).trim()}`);
 }
