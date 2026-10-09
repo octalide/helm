@@ -21,6 +21,9 @@ describe('matches', () => {
     expect(matches(ev({ kind: 'epic', issue: 1, tags: ['progress', 'complete'] }), s, ctx)).toBe(true);
     expect(matches(ev({ kind: 'decision', tags: ['decision', 'question'] }), s, ctx)).toBe(true);
     expect(matches(ev({ kind: 'decision', tags: ['answered'] }), s, ctx)).toBe(true);
+    expect(matches(ev({ issue: 3, tags: ['unowned'] }), s, ctx)).toBe(true);
+    expect(matches(ev({ issue: 3, tags: ['opened'] }), s, ctx)).toBe(false);
+    expect(matches(ev({ issue: 3, tags: ['unowned'] }), sub({}), ctx)).toBe(false);
     expect(matches(ev({ kind: 'epic', issue: 1, tags: ['progress', 'complete'] }), sub({ scope: { kind: 'work' } }), ctx)).toBe(false);
     expect(matches(ev({ kind: 'epic', issue: 1, tags: ['progress', 'complete'] }), sub({}), ctx)).toBe(false);
   });
@@ -33,6 +36,9 @@ describe('matches', () => {
     expect(matches(work(['phase', 'blocked'], 'o/r#1'), s, ctx)).toBe(true);
     expect(matches(ev({ kind: 'epic', issue: 1, tags: ['progress'] }), s, ctx)).toBe(true);
     expect(matches(ev({ kind: 'decision', tags: ['decision', 'question'] }), s, ctx)).toBe(false);
+    expect(matches(ev({ issue: 3, tags: ['unowned'] }), s, ctx)).toBe(false);
+    expect(matches(ev({ issue: 3, tags: ['unowned'] }), sub({ scope: { kind: 'fleet' }, repo: undefined, tags: ['unowned'] }), ctx)).toBe(true);
+    expect(matches(ev({ issue: 3, tags: ['opened'] }), sub({ scope: { kind: 'fleet' }, repo: undefined, tags: ['opened'] }), ctx)).toBe(false);
   });
 
   it('takes a failed verdict but not a green one under failures', () => {
