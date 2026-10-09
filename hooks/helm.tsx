@@ -117,10 +117,13 @@ async function issueAgentType($: $, model: string, effort: Effort): Promise<stri
   return `${PLUGIN}:${name}`;
 }
 
-// every tier this session can route to, registered up front so a dispatch in its first turn finds them
-async function registerTiers($: $, client: HelmClient, repo: RepoName | undefined): Promise<void> {
+// every tier this session can route to, plus the model and effort of every work item it owns, registered up front so a
+// dispatch in its first turn finds them and an agent on a tier since removed can still be resumed
+async function registerTiers($: $, client: HelmClient, repo: RepoName | undefined, session: string): Promise<void> {
   const { routing } = await client.config(repo);
   for (const t of routing.tiers) await issueAgentType($, t.model, t.effort);
+  const { work } = await client.fleet(true);
+  for (const w of work) if (w.owner === session && w.routing) await issueAgentType($, w.routing.model, w.routing.effort);
 }
 
 function port($: $): Port {
@@ -288,7 +291,7 @@ export const register: Register = (on) => {
       await bind($, r);
       r.web = (await client.health()).web;
       issueTypes.clear();
-      await registerTiers($, client, repo).catch((err: Error) => $.ui.log(`helm: issue agents not registered: ${err.message}`));
+      await registerTiers($, client, repo, r.session).catch((err: Error) => $.ui.log(`helm: issue agents not registered: ${err.message}`));
     } catch (err) {
       $.ui.log(`helm: ${(err as Error).message}`);
     }
@@ -359,8 +362,11 @@ export const register: Register = (on) => {
     return text ? { sections: [...out.sections, { id: `${PLUGIN}:role`, text, scope: 'session' as const }] } : out;
   });
 
-  // issue agents start through dispatch, which claims and routes them; the model never picks one itself
-  on('agent.offer', ($, e, next) => (e.agent.startsWith(`${PLUGIN}:issue-`) ? { isOffered: false } : next(e))).catch(($, e, next) => next(e));
+  // issue agents start through dispatch, which claims and routes them, so the model never starts one itself. the guard is
+  // on the spawn, not the offer: an offer is also asked when a message resumes an agent, and refusing it strands the agent
+  on('agent.spawn', ($, e, next) =>
+    e.subagentType.startsWith(`${PLUGIN}:issue-`) && next.origin.plugin !== PLUGIN ? { deny: 'issue agents start through mcp__helm__dispatch, which claims and routes the issue' } : next(e),
+  ).catch(($, e, next) => (next.called ? next(e) : { deny: 'the helm spawn guard failed' }));
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const r = rt;
