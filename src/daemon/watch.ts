@@ -30,7 +30,8 @@ export function globMatch(glob: string, text: string): boolean {
 
 function inScope(e: HelmEvent, s: Subscription): boolean {
   const scope = s.scope;
-  if (scope.kind === 'fleet') return e.kind === 'decision' || e.kind === 'epic' || e.kind === 'work';
+  // an epic's routine phase changes reach the fleet in its epic event
+  if (scope.kind === 'fleet') return e.kind === 'decision' || e.kind === 'epic' || (e.kind === 'work' && !(e.epic && e.tags.includes('phase') && !e.tags.some((t) => ATTENTION.has(t))));
   if (scope.kind === 'work') return (e.kind === 'work' || e.kind === 'decision') && e.owner === s.session;
   if (e.kind === 'work' || e.kind === 'decision' || e.kind === 'epic') return false;
   if (s.repo !== e.repo) return false;

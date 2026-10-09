@@ -2,7 +2,7 @@ import type { Child, ForgeState, Issue, Phase, RepoName, Rollup, TreeNode, WorkV
 
 const ACTIVE: ReadonlySet<Phase> = new Set(['working', 'draft', 'ci', 'ready']);
 // the phases where work needs someone
-export const ATTENTION: ReadonlySet<Phase> = new Set(['blocked', 'failing', 'stalled']);
+export const ATTENTION: ReadonlySet<string> = new Set(['blocked', 'failing', 'stalled']);
 
 const keyOf = (repo: RepoName, number: number) => `${repo}#${number}`;
 
