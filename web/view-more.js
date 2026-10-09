@@ -145,7 +145,7 @@ const REPO_VIEWS = ['prs', 'issues', 'runs', 'worktrees', 'branches'];
 export function repos(main) {
   const f = store.fleet;
   const names = Object.keys(f.repos).sort();
-  const repo = filter('repo') || (names.includes(local('repo')) ? local('repo') : names[0]);
+  const repo = [filter('in'), filter('repo'), local('repo')].find((r) => names.includes(r)) || names[0];
   const view = REPO_VIEWS.includes(filter('tab')) ? filter('tab') : 'prs';
   if (!repo) return fill(main, empty('No repository is watched yet.'));
   local('repo', repo);
@@ -163,7 +163,7 @@ export function repos(main) {
   const tabs = el(
     'div',
     { class: 'toolbar' },
-    el('div', { class: 'seg' }, names.map((r) => el('button', { type: 'button', class: r === repo ? 'on' : '', onclick: () => setQuery({ repo: r }) }, repoShort(r)))),
+    el('div', { class: 'seg' }, names.map((r) => el('button', { type: 'button', class: r === repo ? 'on' : '', onclick: () => setQuery({ in: r }) }, repoShort(r)))),
     el('div', { class: 'seg' }, REPO_VIEWS.map((x) => el('button', { type: 'button', class: x === view ? 'on' : '', onclick: () => setQuery({ tab: x === 'prs' ? null : x }) }, `${x} ${counts[x]}`))),
     el('span', { class: 'grow' }),
     el('span', { class: 'dim small' }, p.lastPoll ? ['polled ', at(p.lastPoll, ' ago'), ` · every ${p.interval}s${p.active ? ', active' : ''}`] : 'not polled yet', p.error ? el('span', { class: 'status-bad' }, ` · ${p.error}`) : ''),
