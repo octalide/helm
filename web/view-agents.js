@@ -1,5 +1,5 @@
 import { columns, stack } from './charts.js';
-import { at, el, empty, ext, filter, href, issueUrl, keyOf, model, PHASE, phasePill, plural, repoShort, store, visibleWork } from './core.js';
+import { at, el, empty, ext, fill, filter, href, issueUrl, keyOf, model, PHASE, phasePill, plural, repoShort, store, visibleWork } from './core.js';
 import { agentDot, section } from './parts.js';
 
 const LIVE = new Set(['running', 'pending', 'waiting']);
@@ -54,7 +54,7 @@ export function agents(main) {
   const past = gone.length
     ? el('details', { class: 'history' }, el('summary', {}, `Ended sessions (${gone.length})`), el('div', { class: 'list' }, gone.map((s) => el('div', { class: 'row' }, el('span', { class: `chip role-${s.role}` }, s.role), el('span', { class: 'grow' }, s.repo || s.title || s.id.slice(0, 8), el('span', { class: 'mono dim' }, ` ${s.id.slice(0, 8)}`)), el('span', { class: 'dim' }, `${plural(s.agents.length, 'agent')} · last seen `, at(s.seenAt, ' ago'))))))
     : '';
-  main.replaceChildren(tiles, ...(cards.length ? cards : [empty('No live sessions.', 'Every Claude Code session with helm enabled registers here.')]), past);
+  fill(main, tiles, ...(cards.length ? cards : [empty('No live sessions.', 'Every Claude Code session with helm enabled registers here.')]), past);
 }
 
 export function routing(main) {
@@ -143,5 +143,5 @@ export function routing(main) {
       : empty('Nothing routed yet.', 'dispatch routes each issue to a tier and logs the pick.'),
   );
 
-  main.replaceChildren(tiles, el('div', { class: 'grid two' }, byTier, hist), table);
+  fill(main, tiles, el('div', { class: 'grid two' }, byTier, hist), table);
 }

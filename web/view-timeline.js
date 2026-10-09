@@ -1,5 +1,5 @@
 import { gantt, legend, segmentsOf } from './charts.js';
-import { dur, el, empty, filter, href, keyOf, PHASE, PHASES, repoShort, setQuery, visibleWork } from './core.js';
+import { dur, el, empty, fill, filter, href, keyOf, PHASE, PHASES, repoShort, setQuery, visibleWork } from './core.js';
 
 const RANGES = { '6h': 6 * 3600_000, '24h': 86400_000, '7d': 7 * 86400_000, '30d': 30 * 86400_000 };
 
@@ -29,7 +29,7 @@ export function timeline(main) {
         .map((p) => [PHASE[p].tone, p === 'working' ? 'working, draft' : p === 'failing' ? 'failing, blocked' : PHASE[p].label]),
     ),
   );
-  if (!rows.length) return main.replaceChildren(tools, empty(`Nothing moved in the last ${range}.`, 'Each work item draws a lane of the phases it went through.'));
+  if (!rows.length) return fill(main, tools, empty(`Nothing moved in the last ${range}.`, 'Each work item draws a lane of the phases it went through.'));
 
   const labels = el(
     'div',
@@ -65,5 +65,5 @@ export function timeline(main) {
       : empty('No finished stretch in this window yet.'),
   );
 
-  main.replaceChildren(tools, el('section', { class: 'panel tl' }, labels, el('div', { class: 'tl-chart' }, chart)), dwell);
+  fill(main, tools, el('section', { class: 'panel tl' }, labels, el('div', { class: 'tl-chart' }, chart)), dwell);
 }
