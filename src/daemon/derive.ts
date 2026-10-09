@@ -45,6 +45,8 @@ const RESTING: ReadonlySet<AgentStatus> = new Set(['waiting', 'idle']);
 export function phaseOf(w: Work, ctx: { pull?: Pull; agent?: AgentStatus; ownerLive?: boolean; blocking: boolean; issueClosed: boolean; setAside?: boolean; stuck?: boolean }): Phase {
   if (w.finished || ctx.issueClosed || ctx.pull?.state === 'merged') return 'done';
   if (ctx.blocking || w.report?.state === 'blocked') return 'blocked';
+  // its worker stopped on purpose: set aside until a dispatch, a working report or a resume picks it up again
+  if (w.report?.state === 'stopped') return 'parked';
   // an agent that ended its turn to wait on a delivery is still on the work, unless the delivery can no longer come,
   // and so is a live session working it itself
   const self = selfWorked(w);

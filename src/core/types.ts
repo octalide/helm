@@ -227,7 +227,7 @@ export type Work = {
   finished?: { at: number; how: 'merged' | 'closed' | 'abandoned' };
 };
 
-// parked: set aside on purpose (a blocked or parked label, or an open blocked-by) with nobody on it
+// parked: set aside on purpose, by a stopped report or, with nobody on it, a blocked or parked label or an open blocked-by
 export type Phase = 'queued' | 'working' | 'draft' | 'ci' | 'failing' | 'ready' | 'blocked' | 'stalled' | 'parked' | 'done';
 
 // a work item joined with what the forge, the machine and the ledger say about it now
