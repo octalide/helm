@@ -379,7 +379,7 @@ export type HelmEvent = {
   sha?: string;
   tag?: string;
   // tags a filter reads: opened, closed, merged, comment, review, ready, draft, edited, labeled, settled, stalled,
-  // completed, success, failure, phase, decision, answered, progress, complete, leftovers
+  // completed, success, failure, phase, decision, answered, progress, complete, leftovers, unowned
   tags: string[];
   author?: Author;
   // one line, then detail lines
@@ -440,5 +440,7 @@ export type Fleet = {
   // the newest events, newest last; absent from a lite answer
   events?: HelmEvent[];
   rates: Record<string, { remaining: number; limit: number; resetAt: number }>;
+  // the phases where work needs someone, for the page to mark without its own copy
+  attention: Phase[];
   at: number;
 };

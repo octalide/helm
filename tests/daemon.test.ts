@@ -9,8 +9,8 @@ import { Daemon } from '../src/daemon/helmd.ts';
 import type { Git } from '../src/daemon/local.ts';
 import { emptyCache } from '../src/daemon/poller.ts';
 import { heldKey } from '../src/daemon/watch.ts';
-import type { HelmEvent } from '../src/core/types.ts';
-import { check, forge, pull, T0, table } from './fixtures.ts';
+import type { HelmEvent, Issue } from '../src/core/types.ts';
+import { check, forge, issue, iso, pull, T0, table } from './fixtures.ts';
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -18,17 +18,30 @@ afterEach(async () => {
 });
 
 // a daemon over a scratch directory that never reaches github, with no timers
-async function daemon(opts: { log?: (line: string) => void; gh?: GitHub; git?: Git; setup?: (home: string, paths: HelmPaths) => Promise<void> } = {}): Promise<{ d: Daemon; paths: HelmPaths }> {
+async function daemon(opts: { log?: (line: string) => void; gh?: GitHub; git?: Git; now?: () => number; setup?: (home: string, paths: HelmPaths) => Promise<void> } = {}): Promise<{ d: Daemon; paths: HelmPaths }> {
   const home = await mkdtemp(join(tmpdir(), 'helm-test-'));
   dirs.push(home);
   const gh = opts.gh ?? ({ rates: {} } as unknown as GitHub);
   const paths = helmPaths({ HOME: home, HELM_HOME: home });
   await opts.setup?.(home, paths);
   const config = { ...DEFAULT_CONFIG, roots: [join(home, 'src')] };
-  const d = new Daemon({ paths, config, gh, version: '0', now: () => T0, loops: false, ...(opts.log ? { log: opts.log } : {}), ...(opts.git ? { git: opts.git } : {}) });
+  const d = new Daemon({ paths, config, gh, version: '0', now: opts.now ?? (() => T0), loops: false, ...(opts.log ? { log: opts.log } : {}), ...(opts.git ? { git: opts.git } : {}) });
   await d.start();
   return { d, paths };
 }
+
+// a forge holding only the given issues, read in full on every poll
+function issuesGh(issues: Issue[]): GitHub {
+  const node = (i: Issue) => ({ number: i.number, title: i.title, url: i.url, createdAt: i.createdAt, updatedAt: i.updatedAt, ...(i.closedAt ? { closedAt: i.closedAt } : {}), author: { login: i.author.login, __typename: 'User' }, labels: { nodes: [] }, comments: { totalCount: 0 } });
+  const of = (state: Issue['state']) => ({ nodes: issues.filter((i) => i.state === state).map(node) });
+  return {
+    rates: {},
+    conditional: async (path: string) => ({ changed: true, body: path.includes('/actions/runs') ? { workflow_runs: [] } : [] }),
+    graphql: async () => ({ repository: { defaultBranchRef: { name: 'dev' }, issues: of('open'), closedIssues: of('closed'), pullRequests: { nodes: [] }, closedPulls: { nodes: [] } } }),
+  } as unknown as GitHub;
+}
+
+const checkUnowned = (d: Daemon) => (d as unknown as { checkUnowned: () => void }).checkUnowned();
 
 const lettersFor = (d: Daemon, session: string, agent?: string) => Object.values(d.ledger.data.letters).filter((l) => l.session === session && l.agent === agent);
 
@@ -363,6 +376,59 @@ describe('daemon', () => {
     delete procs.live[40];
     await d.recheckLeftovers();
     expect(d.ledger.data.work['o/r#7']?.leftovers).toBeUndefined();
+    await d.stop();
+  });
+
+  it('tells the fleet once of an issue nobody owns 30 minutes after it opened, and of none it already had', async () => {
+    let now = T0;
+    const clock = () => now;
+    const issues = [issue(1)];
+    const gh = issuesGh(issues);
+    const { d, paths } = await daemon({ gh, now: clock });
+    d.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    d.register({ id: 'C', cwd: '/', role: 'coordinator' });
+    await d.pollRepo('o/r');
+    now += 60_000;
+    issues.push(...[2, 3, 4, 5].map((n) => issue(n, { createdAt: iso(now - 30_000), updatedAt: iso(now - 30_000) })));
+    await d.pollRepo('o/r');
+    d.queue({ session: 'A', repo: 'o/r', issues: [3] });
+    d.claim({ session: 'A', repo: 'o/r', issue: 4 });
+    now += 29 * 60_000;
+    issues[4] = { ...issues[4]!, state: 'closed', closedAt: iso(now), updatedAt: iso(now) };
+    await d.pollRepo('o/r');
+    const heard = (x: Daemon) => lettersFor(x, 'C').flatMap((l) => l.text.split('\n')).filter((l) => l.includes('unowned'));
+    expect(heard(d)).toEqual([]);
+    now += 60_000;
+    checkUnowned(d);
+    checkUnowned(d);
+    await d.pollRepo('o/r');
+    expect(heard(d)).toEqual(['issue #2 still unowned 30m after it opened: issue 2']);
+    expect(Object.keys(d.ledger.data.unowned)).toEqual(['o/r#2']);
+    await d.stop();
+
+    // a restart delivers nothing again, and its first poll takes nothing it finds open as newly opened
+    issues.push(issue(6, { createdAt: iso(now - 60_000), updatedAt: iso(now - 60_000) }));
+    const again = new Daemon({ paths, config: { ...DEFAULT_CONFIG, roots: [] }, gh, version: '0', now: clock, loops: false });
+    await again.start();
+    await again.pollRepo('o/r');
+    now += 31 * 60_000;
+    await again.pollRepo('o/r');
+    checkUnowned(again);
+    expect(heard(again)).toEqual(['issue #2 still unowned 30m after it opened: issue 2']);
+    await again.stop();
+  });
+
+  it('tells the fleet at once of an issue opened where no repo session is live, unless a session queued it first', async () => {
+    let now = T0;
+    const issues = [issue(1)];
+    const { d } = await daemon({ gh: issuesGh(issues), now: () => now });
+    d.register({ id: 'C', cwd: '/', role: 'coordinator' });
+    await d.pollRepo('o/r');
+    now += 60_000;
+    issues.push(...[7, 8].map((n) => issue(n, { createdAt: iso(now - 30_000), updatedAt: iso(now - 30_000) })));
+    d.queue({ session: 'C', repo: 'o/r', issues: [8] });
+    await d.pollRepo('o/r');
+    expect(lettersFor(d, 'C').flatMap((l) => l.text.split('\n')).filter((l) => l.includes('unowned') || l.includes('live session'))).toEqual(['issue #7 opened with no live session in o/r: issue 7']);
     await d.stop();
   });
 });

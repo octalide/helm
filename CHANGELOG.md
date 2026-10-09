@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0
+
+The ledger moves to version 4. helmd migrates it on start, and a 0.6.0 helmd does not read it after.
+
+- A coordinator's fleet subscription hears by default only what needs it: work entering blocked, failing or stalled, decisions and their answers, adopted, returned and leftover work, and each epic as it completes. Routine phase changes and epic progress stay on the web page and in `view`. A fleet subscription naming `phase` and `progress` hears them as before, with an epic's routine phases only in its epic event. Leftover and adopted work under an epic now reaches the fleet, which it did not (#91).
+- The coordinator hears once of an issue no session owns: one no session queued or claimed within 30 minutes of opening, or at once when its repository had no live repo session. The delivery is tagged `unowned` and is in the fleet default. Issues already open when helm starts watching a repository do not count (#92).
+- The web page takes the phases that need attention from helmd instead of its own copy, the board's Attention column and the overview's attention line among them (#94).
+
 ## 0.6.0
 
 Sessions need `/reload-plugins`: the protocol moves to 3. A session on an older mod is told so and keeps using helmd.

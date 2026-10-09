@@ -10,7 +10,7 @@ import type { HelmPaths } from '../core/paths.ts';
 import type { AgentRecord, Decision, Fleet, ForgeState, HelmEvent, Letter, LetterPart, LocalState, Phase, PollStatus, Pull, RepoName, RepoView, Session, SessionRole, Subscription, TreeNode, Work, WorkView } from '../core/types.ts';
 import { letterText } from '../core/letter.ts';
 import { route } from './deliver.ts';
-import { buildTree } from '../core/tree.ts';
+import { ATTENTION, buildTree } from '../core/tree.ts';
 import { hasWorker, selfWorked } from '../core/work.ts';
 import { pullFor, viewOf } from './derive.ts';
 import { verdictEvent } from './events.ts';
@@ -21,6 +21,7 @@ import { discover, type Git, git as realGit, scan } from './local.ts';
 import { readJson, Saver, writeJson } from './persist.ts';
 import { leftovers, type ProcTable, procfs, still } from './procs.ts';
 import { emptyCache, type RepoCache, RepoPoller } from './poller.ts';
+import { unownedDue, unownedEvent } from './unowned.ts';
 import { ended, heldKey, expired, type MatchContext } from './watch.ts';
 
 export type DaemonDeps = {
@@ -246,6 +247,9 @@ export class Daemon {
       return;
     }
     st.running = true;
+    // the first poll of a repository in this daemon's run only learns what is there: nothing it sees opened since the
+    // cache was written opened while helm watched
+    const watching = st.lastPoll !== undefined;
     try {
       const p = await this.poller(repo);
       const { changed, events } = await p.poll(this.now(), force);
@@ -259,7 +263,9 @@ export class Daemon {
         const verdict = pull ? verdictOf(pull.checks) : 'none';
         return pull && (verdict === 'success' || verdict === 'failure') ? pull.sha : undefined;
       });
+      if (watching) this.noteOpened(repo, events);
       if (events.length) this.handle(repo, events, await this.heldHeads(repo, events));
+      this.checkUnowned(repo);
       if (changed) this.changed();
     } catch (error) {
       st.failures++;
@@ -317,6 +323,7 @@ export class Daemon {
     for (const s of Object.values(this.ledger.data.subscriptions)) {
       if (expired(s, now) || ended(s, s.repo ? this.pollers.get(s.repo)?.forge : undefined)) this.ledger.unsubscribe(s.id);
     }
+    this.checkUnowned();
     this.refreshViews();
   }
 
@@ -350,6 +357,36 @@ export class Daemon {
       }
     }
     this.dispatch(events, held ? { held } : {});
+  }
+
+  // each issue a poll saw opened waits for a session to own it, unowned from the start when its repository has no live
+  // repo session
+  private noteOpened(repo: RepoName, events: readonly HelmEvent[]): void {
+    const forge = this.pollers.get(repo)?.forge;
+    const alone = !Object.values(this.ledger.data.sessions).some((s) => !s.gone && s.role === 'repo' && s.repo === repo);
+    for (const e of events) {
+      if (e.kind !== 'issue' || e.issue === undefined || !e.tags.includes('opened')) continue;
+      const i = forge?.issues.find((x) => x.number === e.issue);
+      if (i) this.ledger.opened(repo, i.number, Date.parse(i.createdAt), alone);
+    }
+  }
+
+  // a waiting issue that a session queued or claimed, or that closed, is let go; one past its window reaches the fleet,
+  // once. only a repository polled in this run is judged, so a cache from before a restart settles nothing
+  private checkUnowned(only?: RepoName): void {
+    const now = this.now();
+    const events: HelmEvent[] = [];
+    for (const u of this.ledger.unownedWaiting()) {
+      if ((only && u.repo !== only) || !this.polls.get(u.repo)?.lastPoll) continue;
+      const key = workKey(u.repo, u.issue);
+      const i = this.pollers.get(u.repo)?.forge?.issues.find((x) => x.number === u.issue);
+      if (this.ledger.data.work[key] || i?.state !== 'open') this.ledger.settleUnowned(key, false);
+      else if (now >= unownedDue(u)) {
+        this.ledger.settleUnowned(key, true);
+        events.push(unownedEvent(u, i, now));
+      }
+    }
+    this.dispatch(events);
   }
 
   private prIssue(repo: RepoName, pr: number): { issue?: number } {
@@ -510,6 +547,7 @@ export class Daemon {
       repos,
       ...(lite ? {} : { events: d.events.slice(-150) }),
       rates: { ...this.gh.rates },
+      attention: [...ATTENTION] as Phase[],
       at: this.now(),
     };
   }
