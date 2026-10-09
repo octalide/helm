@@ -196,10 +196,10 @@ describe('daemon', () => {
     const caught = (agent: string) => lettersFor(d, 'A', agent).some((l) => l.text.includes('ci settled success'));
     // missing here, present once fetched, and on top of the named head: delivered
     await wait('pushed on top', 160);
-    expect(fetched).toEqual(['fix/160']);
+    expect(fetched).toEqual(['pull/160/head']);
     // still missing after the fetch: helm cannot judge it, so it delivers
     await wait('never fetched', 161);
-    expect(fetched).toEqual(['fix/160', 'fix/161']);
+    expect(fetched).toEqual(['pull/160/head', 'pull/161/head']);
     // present and unrelated: held back, and once a later poll still shows that head the wait reads as stalled
     const held = await wait('unrelated', 162);
     expect(['pushed on top', 'never fetched', 'unrelated'].filter(caught)).toEqual(['pushed on top', 'never fetched']);

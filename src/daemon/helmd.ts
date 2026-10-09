@@ -621,7 +621,7 @@ export class Daemon {
     if (verdict !== 'success' && verdict !== 'failure') return;
     // right after a push the forge can still show the old head: its verdict is not the one the subscriber waits on,
     // and the live verdict comes once ci settles on the new head
-    if (await this.holds(repo, sub, pull.sha, pull.head)) return this.ledger.holdBack(sub.id, pull.sha);
+    if (await this.holds(repo, sub, pull.sha, pull.number)) return this.ledger.holdBack(sub.id, pull.sha);
     this.dispatch([verdictEvent(repo, pull, verdict, this.now())], { only: [sub] });
   }
 
@@ -640,14 +640,15 @@ export class Daemon {
   // whether ci on sha is not the verdict a subscription waits on. a named head takes only itself and what descends
   // from it, so a pre-rebase head is held back too. a guessed head holds back only what it strictly descends from,
   // since the guess can itself be the stale side. either way a pair helm cannot judge delivers
-  private async holds(repo: RepoName, sub: Subscription, sha: string, branch: string | undefined): Promise<boolean> {
+  private async holds(repo: RepoName, sub: Subscription, sha: string, pr: number): Promise<boolean> {
     if (!sub.head || sameSha(sha, sub.head)) return false;
-    return sub.named ? (await this.descends(repo, branch, sha, sub.head)) === false : (await this.descends(repo, branch, sub.head, sha)) === true;
+    return sub.named ? (await this.descends(repo, pr, sha, sub.head)) === false : (await this.descends(repo, pr, sub.head, sha)) === true;
   }
 
-  // whether head descends from base, by a checkout that has both commits. when none has them, the pr's branch is
-  // fetched into one, since a head pushed from another machine is in no checkout here; undefined when still missing
-  private async descends(repo: RepoName, branch: string | undefined, head: string, base: string): Promise<boolean | undefined> {
+  // whether head descends from base, by a checkout that has both commits. when none has them, the pr's head is
+  // fetched into one, since a head pushed from another machine or a fork is in no checkout here; undefined when
+  // still missing
+  private async descends(repo: RepoName, pr: number, head: string, base: string): Promise<boolean | undefined> {
     const checkouts = this.checkouts.get(repo) ?? [];
     const has = async (checkout: string) => {
       for (const sha of [head, base]) if (!(await this.git(checkout, ['cat-file', '-e', `${sha}^{commit}`]).then(() => true, () => false))) return false;
@@ -656,8 +657,8 @@ export class Daemon {
     const judge = (checkout: string) => this.git(checkout, ['merge-base', '--is-ancestor', base, head]).then(() => true, () => false);
     for (const checkout of checkouts) if (await has(checkout)) return judge(checkout);
     const into = checkouts[0];
-    if (!into || !branch) return undefined;
-    await this.git(into, ['fetch', '--quiet', 'origin', branch]).catch((error: Error) => this.log(`${repo} fetch ${branch} failed: ${error.message}`));
+    if (!into) return undefined;
+    await this.git(into, ['fetch', '--quiet', 'origin', `pull/${pr}/head`]).catch((error: Error) => this.log(`${repo} fetch of pr #${pr} failed: ${error.message}`));
     return (await has(into)) ? judge(into) : undefined;
   }
 
@@ -670,7 +671,7 @@ export class Daemon {
       if (e.kind !== 'ci' || e.pr === undefined || !e.sha) continue;
       const pull = pulls.find((p) => p.number === e.pr);
       for (const s of subs) {
-        if (s.scope.kind !== 'pr' || s.scope.number !== e.pr || !(await this.holds(repo, s, e.sha, pull?.head))) continue;
+        if (s.scope.kind !== 'pr' || s.scope.number !== e.pr || !(await this.holds(repo, s, e.sha, e.pr))) continue;
         out.add(heldKey(s.id, e.sha));
         if (e.tags.includes('settled') && pull?.state === 'open' && pull.sha === e.sha) this.ledger.holdBack(s.id, e.sha);
       }
