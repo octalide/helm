@@ -99,10 +99,13 @@ The default tiers:
 
 | tier | model | effort | for |
 |---|---|---|---|
-| mechanical | claude-sonnet-5-5 | low | version bumps, pattern-following additions, renames, docs, one-file fixes with a stated cause |
+| mechanical | claude-haiku-5-5 | high | version and pin bumps, renames, moves, docs, pattern-following data rows, finishing a done PR, one-file fixes with a stated cause |
+| light | claude-sonnet-5-5 | medium | small contained work in one module with a stated design |
 | standard | claude-opus-5-5 | medium | ordinary work in one subsystem with clear acceptance |
-| deep | claude-opus-5-5 | high | cross-subsystem or contract changes, codegen, concurrency, unknown root causes |
-| frontier | claude-fable-5-1 | high | design-heavy or research-grade work, or what earlier attempts failed on |
+| deep | claude-opus-5-5 | high | cross-subsystem or contract changes, codegen, concurrency, soundness, design-heavy work, unknown root causes |
+| frontier | claude-fable-5-1 | high | reserved for decision-heavy work: architecture, contract or language design, research-grade problems, what earlier tiers failed on. Never an implementation workhorse |
+
+A judge answer that names no tier falls back to `routing.fallback`, `standard` by default.
 
 ## Web page
 
@@ -139,7 +142,9 @@ The page is served on 127.0.0.1 only. A request must name this server as its Hos
 }
 ```
 
-`roots` are searched for checkouts by their `origin` remote. `repos` are polled whether or not anything references them. `routing.tiers` replaces the table whole. A repository can set its own `routing` in `.helm/config.json`.
+`roots` are searched for checkouts by their `origin` remote. `repos` are polled whether or not anything references them. `routing.tiers` replaces the table whole, and `routing.fallback` must name one of its tiers. A repository can set its own `routing` in `.helm/config.json`.
+
+helmd watches the file and applies an edit live, with no restart. An edit that fails to parse or check is logged to the daemon log and the running config kept.
 
 State lives under `$XDG_STATE_HOME/helm` and the socket under `$XDG_RUNTIME_DIR/helm`. `HELM_HOME` puts everything under one directory, which is how a second daemon runs beside the real one.
 
