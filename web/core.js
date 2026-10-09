@@ -109,7 +109,8 @@ export const PHASE = {
   parked: { label: 'parked', tone: 'parked', group: 'parked' },
   done: { label: 'done', tone: 'done', group: 'done' },
 };
-export const ATTENTION = new Set(['failing', 'blocked', 'stalled']);
+// the server's attention phases, set with each fleet answer
+export const ATTENTION = new Set();
 export const RANK = { blocked: 0, failing: 1, stalled: 2, ready: 3, ci: 4, draft: 5, working: 6, queued: 7, parked: 8, done: 9 };
 
 export const phasePill = (p) => el('span', { class: `pill t-${PHASE[p]?.tone || 'queued'}` }, PHASE[p]?.label || p);
@@ -142,6 +143,8 @@ export const store = {
   },
   setFleet(f) {
     this.fleet = f;
+    ATTENTION.clear();
+    for (const p of f.attention || []) ATTENTION.add(p);
     this.roots = rootsOf(f.tree || []);
     this.emit();
   },
