@@ -48,7 +48,8 @@ export function workLine(v: WorkView, home?: string): string {
     v.report ? `reported ${v.report.state}${v.report.note ? `: ${v.report.note}` : ''}` : '',
   ].filter(Boolean);
   const next = v.plan?.find((p) => !p.done);
-  return `${v.repo}#${v.issue} [${v.phase}] ${v.title}\n  ${parts.join(' · ')}${next ? `\n  next: ${next.text}` : ''}`;
+  const left = (v.leftovers ?? []).map((p) => `\n  left running: pid ${p.pid} ${p.command}`).join('');
+  return `${v.repo}#${v.issue} [${v.phase}] ${v.title}\n  ${parts.join(' · ')}${next ? `\n  next: ${next.text}` : ''}${left}`;
 }
 
 // the hierarchy as an indented outline, each epic with what its subtree adds up to
@@ -115,7 +116,7 @@ export function sessionLine(s: Session, now: number, self?: string): string {
 }
 
 export function subscriptionLine(s: Subscription, describe: (s: Subscription) => string): string {
-  return `${s.id} ${describe(s)} · ci ${s.ci}${s.tags ? ` · tags ${s.tags.join(',')}` : ''}${s.until ? ` · until ${typeof s.until === 'object' ? s.until.at : s.until}` : ''}${s.agent ? ` · for agent ${s.agent}` : ''}`;
+  return `${s.id} ${describe(s)} · ci ${s.ci}${s.tags ? ` · tags ${s.tags.join(',')}` : ''}${s.until ? ` · until ${typeof s.until === 'object' ? s.until.at : s.until}` : ''}${s.head ? ` · head ${s.head.slice(0, 7)}` : ''}${s.agent ? ` · for agent ${s.agent}` : ''}`;
 }
 
 export function forgeBlock(what: 'issues' | 'prs' | 'runs', f: ForgeState | undefined, now: number, label?: string): string {

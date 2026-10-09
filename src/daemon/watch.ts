@@ -8,8 +8,8 @@ export const DEFAULT_ITEM_TAGS: Record<string, readonly string[]> = {
   branch: [],
   run: [],
   tag: [],
-  work: ['phase', 'answered'],
-  fleet: ['phase', 'decision', 'answered', 'progress'],
+  work: ['phase', 'answered', 'leftovers'],
+  fleet: ['phase', 'decision', 'answered', 'progress', 'leftovers'],
 };
 
 const ATTENTION: ReadonlySet<string> = new Set(['blocked', 'failing', 'stalled']);
@@ -17,7 +17,11 @@ const ATTENTION: ReadonlySet<string> = new Set(['blocked', 'failing', 'stalled']
 export type MatchContext = {
   // branches a repo-scope subscription hears failed runs on: the default branch and the long-lived ones
   protectedBranches: ReadonlySet<string>;
+  // heldKey pairs of a subscription and a head whose ci is not its verdict
+  held?: ReadonlySet<string>;
 };
+
+export const heldKey = (sub: string, sha: string): string => `${sub}@${sha}`;
 
 export function globMatch(glob: string, text: string): boolean {
   const re = new RegExp(`^${glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`);
@@ -69,7 +73,11 @@ function ciTaken(e: HelmEvent, s: Subscription, ctx: MatchContext): boolean {
 export function matches(e: HelmEvent, s: Subscription, ctx: MatchContext): boolean {
   if (!inScope(e, s)) return false;
   if (e.author?.bot && !s.bots) return false;
-  if (e.kind === 'ci') return ciTaken(e, s, ctx);
+  if (e.kind === 'ci') {
+    // ci on a head other than the one the subscriber waits on speaks of code it no longer waits on
+    if (e.sha && ctx.held?.has(heldKey(s.id, e.sha))) return false;
+    return ciTaken(e, s, ctx);
+  }
   const tags = s.tags ?? DEFAULT_ITEM_TAGS[s.scope.kind] ?? [];
   return e.tags.some((t) => tags.includes(t));
 }
