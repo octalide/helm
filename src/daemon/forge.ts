@@ -18,7 +18,7 @@ export const SNAPSHOT_QUERY = `query($owner:String!,$name:String!){
     }}
     pullRequests(states:OPEN,first:50,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
       number title url isDraft createdAt updatedAt author{login __typename}
-      headRefName headRefOid baseRefName mergeable reviewDecision
+      headRefName headRefOid isCrossRepository baseRefName mergeable reviewDecision
       closingIssuesReferences(first:10){nodes{number}}
       comments(last:1){totalCount nodes{${NOTE}}}
       reviews(last:1){totalCount nodes{author{login __typename} state submittedAt url bodyText}}
@@ -85,6 +85,7 @@ type GqlPull = {
   author: GqlAuthor;
   headRefName: string;
   headRefOid: string;
+  isCrossRepository?: boolean;
   baseRefName: string;
   mergeable?: string;
   reviewDecision?: string | null;
@@ -199,6 +200,7 @@ function pull(p: GqlPull): Pull {
     author: author(p.author),
     head: p.headRefName,
     sha: p.headRefOid,
+    ...(p.isCrossRepository ? { fork: true } : {}),
     base: p.baseRefName,
     closes: p.closingIssuesReferences.nodes.map((n) => n.number),
     ...(p.reviewDecision ? { review: p.reviewDecision.toLowerCase() } : {}),

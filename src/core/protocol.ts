@@ -18,6 +18,8 @@ export type SubscribeBody = {
   tags?: string[];
   bots?: boolean;
   until?: Until;
+  // a pr subscription's head as the caller pushed it: ci on a head strictly behind it is not delivered
+  sha?: string;
   session: string;
   agent?: string;
 };

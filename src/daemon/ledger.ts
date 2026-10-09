@@ -119,7 +119,8 @@ export class Ledger {
     if (!has) this.subscribe({ session: s.id, scope: { kind } });
   }
 
-  subscribe(b: SubscribeBody): Subscription {
+  // guess: a pr subscription's head when the caller named none
+  subscribe(b: SubscribeBody, guess?: string): Subscription {
     const spans = b.scope.kind === 'work' || b.scope.kind === 'fleet';
     if (!spans && !b.repo) throw new Error(`a ${b.scope.kind} subscription names its repository`);
     if (b.until !== undefined && b.ci === 'none' && b.until === 'settled') throw new Error('until settled needs ci other than none');
@@ -134,6 +135,7 @@ export class Ledger {
       ...(spans ? {} : { repo: b.repo }),
       ...(b.tags ? { tags: b.tags } : {}),
       ...(b.until !== undefined ? { until: b.until } : {}),
+      ...(b.scope.kind === 'pr' && b.sha ? { head: b.sha, named: true } : b.scope.kind === 'pr' && guess ? { head: guess } : {}),
       ...(b.agent ? { agent: b.agent } : {}),
     };
     this.data.subscriptions[id] = sub;

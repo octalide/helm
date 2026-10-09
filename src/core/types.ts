@@ -57,6 +57,8 @@ export type Pull = {
   author: Author;
   head: string;
   sha: string;
+  // the head branch lives in a fork, so this machine's origin/<head> is not it
+  fork?: boolean;
   base: string;
   closes: number[];
   review?: string;
@@ -327,6 +329,10 @@ export type Subscription = {
   tags?: string[];
   bots: boolean;
   until?: Until;
+  // a pr subscription's expected head. named by the caller, ci on a head that is neither it nor past it is not its
+  // verdict; guessed from the local checkout, which can itself be stale, only ci on a head strictly behind it is not
+  head?: string;
+  named?: boolean;
   session: string;
   agent?: string;
   createdAt: number;

@@ -42,7 +42,7 @@ Write to GitHub with `gh`, passing `-R owner/name` on every write and putting lo
 
 ## Waiting on CI
 
-- **Subscribe, then end your turn.** Call `watch` with action `subscribe`, `scope` set to `pr <number>`, `ci` set to `settled` and `until` set to `settled`. Then call `report` with state `waiting`, and end your turn. The verdict arrives with your next tool call, or as a message that resumes you once you have ended. The subscription retires itself once CI settles. Do nothing else while you wait: no `gh` watch and no checks on the side.
+- **Subscribe, then end your turn.** Call `watch` with action `subscribe`, `scope` set to `pr <number>`, `ci` set to `settled`, `until` set to `settled` and `sha` set to the head you just pushed (`git rev-parse HEAD`). Then call `report` with state `waiting`, and end your turn. The verdict arrives with your next tool call, or as a message that resumes you once you have ended. The subscription retires itself once CI settles. Do nothing else while you wait: no `gh` watch and no checks on the side.
 - **Fallback, only when `subscribe` is refused or helm is down:** one blocking wait, `gh pr checks <pr> --watch`, run with the tool's own background mode (`run_in_background`) if your tools have one. That is a wait, not polling. Never loop on it. Say in the report that you fell back.
 
 ## Shared machine
