@@ -17,6 +17,7 @@ function env(issues: Record<number, { state: string; pr?: boolean }>) {
       const i = issues[Number(m[1])]!;
       return json({ repo: 'o/r', number: Number(m[1]), title: `t${m[1]}`, state: i.state, url: 'u', pr: i.pr ?? false, author: 'a', labels: [], body: 'b', comments: [] });
     }
+    if (path === '/v1/fleet') return json({ work: [] });
     if (path === '/v1/work/claim') return json({});
     if (path === '/v1/decisions') return json({ id: 'd1' });
     return json({ error: 'nope' }, 404);

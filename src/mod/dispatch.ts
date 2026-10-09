@@ -40,7 +40,8 @@ export async function dispatchIssues(env: ToolEnv, port: DispatchPort, input: Di
       let routing: Routing;
       if (named) routing = asRouting(named, 'caller', port.now());
       else {
-        const answer = await port.complete({ model: cfg.judge, prompt: routingPrompt(detail, cfg.tiers) });
+        const work = (await env.client.fleet(true)).work.find((w) => w.repo === repo && w.issue === issue);
+        const answer = await port.complete({ model: cfg.judge, prompt: routingPrompt(detail, cfg.tiers, work) });
         const fallback = cfg.tiers.find((t) => t.name === cfg.fallback)!;
         routing = 'text' in answer ? parseRouting(answer.text, cfg, port.now()) : { ...asRouting(fallback, 'judge', port.now()), confidence: 0, reason: `the judge did not answer (${answer.failed}); fell back to ${fallback.name}` };
       }

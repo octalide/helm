@@ -1,11 +1,26 @@
 import type { IssueDetail, RoutingConfig } from '../core/protocol.ts';
-import type { Routing, Tier } from '../core/types.ts';
+import type { Routing, Tier, WorkView } from '../core/types.ts';
+import { checkSummary } from './format.ts';
 
 const BODY_CHARS = 8000;
 const COMMENT_CHARS = 1500;
 const COMMENTS = 6;
 
-export function routingPrompt(issue: IssueDetail, tiers: readonly Tier[]): string {
+// what a resume finds already done: the pull request, its ci, the last report and the plan with its done steps
+export function existingWork(w: WorkView | undefined): string[] {
+  if (!w || !(w.pull || w.report || w.plan?.length)) return [];
+  const done = w.plan?.filter((p) => p.done).length ?? 0;
+  return [
+    '',
+    'Work already done on this issue (the agent is resuming it):',
+    ...(w.pull ? [`pull request #${w.pull.number}: ${w.pull.draft ? 'draft' : 'ready for review'}, ${checkSummary(w.checks)}`] : ['no pull request yet']),
+    ...(w.report ? [`last report: ${w.report.state}${w.report.note ? `: ${clip(w.report.note, 300)}` : ''}`] : []),
+    ...(w.plan?.length ? [`plan, ${done} of ${w.plan.length} steps done:`, ...w.plan.map((p) => `- [${p.done ? 'x' : ' '}] ${p.text}`)] : []),
+    'Route on the work that is left, not on the issue as a whole: a change that is implemented and only needs its pull request finished, fixed or marked ready belongs on a cheap tier.',
+  ];
+}
+
+export function routingPrompt(issue: IssueDetail, tiers: readonly Tier[], work?: WorkView): string {
   const comments = issue.comments.slice(-COMMENTS).map((c) => `--- ${c.author}, ${c.at}\n${clip(c.body, COMMENT_CHARS)}`);
   return [
     'You route a GitHub issue to the cheapest tier of model and reasoning effort that will implement it correctly in one pass.',
@@ -20,6 +35,7 @@ export function routingPrompt(issue: IssueDetail, tiers: readonly Tier[]): strin
     '',
     clip(issue.body, BODY_CHARS) || '(no body)',
     ...(comments.length ? ['', `Latest comments (${issue.comments.length} in all):`, ...comments] : []),
+    ...existingWork(work),
     '',
     'Answer with one JSON object and nothing else:',
     '{"tier": "<tier name>", "confidence": <0 to 1, how sure you are this is the right tier>, "reason": "<one sentence naming what decided it>"}',
