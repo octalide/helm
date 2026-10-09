@@ -362,8 +362,11 @@ export const register: Register = (on) => {
     return text ? { sections: [...out.sections, { id: `${PLUGIN}:role`, text, scope: 'session' as const }] } : out;
   });
 
-  // issue agents start through dispatch, which claims and routes them; the model never picks one itself
-  on('agent.offer', ($, e, next) => (e.agent.startsWith(`${PLUGIN}:issue-`) ? { isOffered: false } : next(e))).catch(($, e, next) => next(e));
+  // issue agents start through dispatch, which claims and routes them, so the model never starts one itself. the guard is
+  // on the spawn, not the offer: an offer is also asked when a message resumes an agent, and refusing it strands the agent
+  on('agent.spawn', ($, e, next) =>
+    e.subagentType.startsWith(`${PLUGIN}:issue-`) && next.origin.plugin !== PLUGIN ? { deny: 'issue agents start through mcp__helm__dispatch, which claims and routes the issue' } : next(e),
+  ).catch(($, e, next) => (next.called ? next(e) : { deny: 'the helm spawn guard failed' }));
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const r = rt;
