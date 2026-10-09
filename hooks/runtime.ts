@@ -19,8 +19,13 @@ export type Runtime = {
   install: Install;
   home: string;
   session: string;
+  // the session's repository and role as helmd last answered them
   repo?: RepoName;
   role: SessionRole;
+  // the role asked for, by HELM_ROLE or /helm role, sent at each register; without one helmd decides
+  asked?: SessionRole;
+  // the repository of the checkout the session runs in, a default for a session helmd does not know
+  checkout?: RepoName;
   mailbox: Mailbox;
   // the web page helmd serves, once it has answered
   web?: string;
