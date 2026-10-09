@@ -260,6 +260,12 @@ describe('daemon', () => {
     expect(phase()).toBe('parked');
     d.heartbeat('A', [agent('y', 'running')]);
     expect(phase()).toBe('working');
+
+    // a late stopped from a replaced agent is refused and changes nothing
+    d.ledger.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'z' }, 'one');
+    const wait2 = wait('z');
+    expect(() => d.report({ session: 'A', agent: 'y', repo: 'o/r', issue: 1, state: 'stopped' })).toThrow(/agent z holds it/);
+    expect([d.ledger.data.work['o/r#1']?.report, d.ledger.data.subscriptions[wait2.id]?.agent]).toEqual([undefined, 'z']);
     await d.stop();
   });
 
