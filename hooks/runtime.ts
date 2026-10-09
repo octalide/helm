@@ -21,6 +21,8 @@ export type Runtime = {
   mailbox: Mailbox;
   // the web page helmd serves, once it has answered
   web?: string;
+  // this load of the module, stamped as the binding's holder; alive goes false for good once another holds it
+  instance: string;
   alive: boolean;
   timers: { cancel: () => void }[];
 };
