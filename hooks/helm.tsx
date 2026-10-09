@@ -102,9 +102,10 @@ async function agentRecords($: $): Promise<AgentRecord[]> {
   }));
 }
 
-async function bind($: $, r: Runtime): Promise<void> {
+// from: the session this process went on from, which helmd hands over to this one whole
+async function bind($: $, r: Runtime, from?: string): Promise<void> {
   r.session = await $.session.id();
-  await r.client.register({ id: r.session, cwd: await $.session.cwd(), role: r.role, ...(r.repo ? { repo: r.repo } : {}) });
+  await r.client.register({ id: r.session, cwd: await $.session.cwd(), role: r.role, ...(r.repo ? { repo: r.repo } : {}), ...(from && from !== r.session ? { from } : {}) });
 }
 
 // issue agent types registered by this load of the module, by name
@@ -170,8 +171,10 @@ function pump($: $, r: Runtime): void {
   const run = async () => {
     try {
       let buf = '';
-      for await (const piece of $.process.spawn({ argv: daemonArgv($, 'stream', r.session) })) {
-        if (!(await holds($, r))) break;
+      const session = r.session;
+      // a stream reads one session's letters: once the process goes on under another id, it is opened again for that one
+      for await (const piece of $.process.spawn({ argv: daemonArgv($, 'stream', session) })) {
+        if (!(await holds($, r)) || r.session !== session) break;
         if (piece.stream !== 'stdout') continue;
         buf += piece.text;
         for (let i = buf.indexOf('\n'); i >= 0; i = buf.indexOf('\n')) {
@@ -341,9 +344,10 @@ export const register: Register = (on) => {
     const r = rt;
     if (!r) return out;
     if (e.reason === 'clear' || e.reason === 'resume') {
-      // the process goes on under another session id, with no session.start, and this instance keeps the binding
+      // the process goes on under another session id, with no session.start, and this instance keeps the binding; the
+      // new id takes over what the ended one held
       await update($, binder, () => r.instance).catch(() => {});
-      r.timers.push($.clock.after(500, () => void bind($, r).catch(() => {})));
+      r.timers.push($.clock.after(500, () => void bind($, r, e.sessionId).catch(() => {})));
       return out;
     }
     r.alive = false;
