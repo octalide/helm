@@ -62,6 +62,10 @@ const DISCOVER_MS = 10 * 60_000;
 const RATE_FLOOR = 150;
 const LOG_TAIL = 200;
 
+const SHA = /^[0-9a-f]{7,40}$/i;
+// a commit id and one of its abbreviations name the same commit
+const sameSha = (a: string, b: string): boolean => a.toLowerCase().startsWith(b.toLowerCase()) || b.toLowerCase().startsWith(a.toLowerCase());
+
 // one letter's addressee: a session's main loop, or one agent of it
 type Recipient = { session: string; agent?: string };
 
@@ -540,19 +544,36 @@ export class Daemon {
   // a new subscription polls its repository, and one on a pr whose head ci has already settled hears that verdict
   // now, alone: the event that announced it fired before the subscription existed
   async subscribe(b: SubscribeBody): Promise<Subscription> {
+    if (b.sha !== undefined && !SHA.test(b.sha)) throw new Error(`sha ${b.sha} is not a commit id of 7 to 40 hex digits`);
     const sub = this.ledger.subscribe(b);
-    if (sub.repo) await this.catchUp(sub, sub.repo);
+    if (sub.repo) await this.catchUp(sub, sub.repo, b.sha);
     return sub;
   }
 
-  private async catchUp(sub: Subscription, repo: RepoName): Promise<void> {
+  private async catchUp(sub: Subscription, repo: RepoName, sha?: string): Promise<void> {
     await this.ask(repo).catch(() => undefined);
     if (sub.scope.kind !== 'pr' || sub.ci === 'none') return;
     const number = sub.scope.number;
     const pull = this.forgeOf(repo)?.pulls.find((p) => p.number === number && p.state === 'open');
     const verdict = pull ? verdictOf(pull.checks) : 'none';
     if (!pull || (verdict !== 'success' && verdict !== 'failure')) return;
+    // right after a push the forge can still show the old head: its verdict is not the one the subscriber waits on,
+    // and the live verdict comes once ci settles on the new head
+    const head = sha ?? (await this.pushedHead(repo, pull.head));
+    if (head && !sameSha(pull.sha, head)) return;
     this.dispatch([verdictEvent(repo, pull, verdict, this.now())], { only: [sub] });
+  }
+
+  // the branch's head as this machine last pushed or fetched it, the newest across the repository's checkouts
+  private async pushedHead(repo: RepoName, branch: string): Promise<string | undefined> {
+    const ref = `refs/remotes/origin/${branch}`;
+    let best: { sha: string; at: number } | undefined;
+    for (const checkout of this.checkouts.get(repo) ?? []) {
+      const out = await this.git(checkout, ['for-each-ref', '--format=%(refname)%09%(objectname)%09%(committerdate:unix)', ref]).catch(() => '');
+      const [, sha, at] = out.split('\n').find((l) => l.startsWith(`${ref}\t`))?.split('\t') ?? [];
+      if (sha && (!best || Number(at) > best.at)) best = { sha, at: Number(at) };
+    }
+    return best?.sha;
   }
 
   queue(b: QueueBody): ReturnType<Ledger['queue']> {

@@ -6,7 +6,9 @@ import { DEFAULT_CONFIG } from '../src/core/config.ts';
 import { type HelmPaths, helmPaths } from '../src/core/paths.ts';
 import type { GitHub } from '../src/daemon/github.ts';
 import { Daemon } from '../src/daemon/helmd.ts';
-import { T0 } from './fixtures.ts';
+import type { Git } from '../src/daemon/local.ts';
+import { emptyCache } from '../src/daemon/poller.ts';
+import { check, forge, pull, T0 } from './fixtures.ts';
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -14,12 +16,14 @@ afterEach(async () => {
 });
 
 // a daemon over a scratch directory that never reaches github, with no timers
-async function daemon(opts: { log?: (line: string) => void; gh?: GitHub } = {}): Promise<{ d: Daemon; paths: HelmPaths }> {
+async function daemon(opts: { log?: (line: string) => void; gh?: GitHub; git?: Git; setup?: (home: string, paths: HelmPaths) => Promise<void> } = {}): Promise<{ d: Daemon; paths: HelmPaths }> {
   const home = await mkdtemp(join(tmpdir(), 'helm-test-'));
   dirs.push(home);
   const gh = opts.gh ?? ({ rates: {} } as unknown as GitHub);
   const paths = helmPaths({ HOME: home, HELM_HOME: home });
-  const d = new Daemon({ paths, config: DEFAULT_CONFIG, gh, version: '0', now: () => T0, loops: false, ...(opts.log ? { log: opts.log } : {}) });
+  await opts.setup?.(home, paths);
+  const config = { ...DEFAULT_CONFIG, roots: [join(home, 'src')] };
+  const d = new Daemon({ paths, config, gh, version: '0', now: () => T0, loops: false, ...(opts.log ? { log: opts.log } : {}), ...(opts.git ? { git: opts.git } : {}) });
   await d.start();
   return { d, paths };
 }
@@ -66,6 +70,38 @@ describe('daemon', () => {
     d.answer(q.id, { text: 'this', by: 'human' });
     expect(lettersFor(d, 'A', 'x').map((l) => l.text.split('\n')[0])).toEqual([`[helm decision ${q.id} answered by human] which`]);
     expect(lettersFor(d, 'A').some((l) => l.text.includes(`decision ${q.id} answered by human`))).toBe(true);
+    await d.stop();
+  });
+
+  it('catches a subscriber up only on the head it waits on, not one the forge still shows from before a push', async () => {
+    const [old, pushed] = ['a'.repeat(40), 'c'.repeat(40)];
+    const offline = { rates: {}, conditional: async () => Promise.reject(new Error('offline')) } as unknown as GitHub;
+    let remote = pushed;
+    const git: Git = async (_cwd, args) => {
+      if (args[0] === 'config') return 'git@github.com:o/r.git\n';
+      if (args[0] === 'for-each-ref' && args.at(-1) === 'refs/remotes/origin/feat/50') return `refs/remotes/origin/feat/50\t${remote}\t1\n`;
+      return '';
+    };
+    const { d } = await daemon({
+      gh: offline,
+      git,
+      setup: async (home, paths) => {
+        await mkdir(join(home, 'src', 'r', '.git'), { recursive: true });
+        await mkdir(paths.repos, { recursive: true });
+        const settled = forge({ pulls: [pull(150, { sha: old, checks: [check('test', 'success')] })] });
+        await writeFile(join(paths.repos, 'o__r.json'), JSON.stringify({ ...emptyCache(), forge: settled }));
+      },
+    });
+    d.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    const wait = (agent: string, sha?: string) => d.subscribe({ session: 'A', agent, repo: 'o/r', scope: { kind: 'pr', number: 150 }, ci: 'settled', until: 'settled', ...(sha ? { sha } : {}) });
+    const caught = (agent: string) => lettersFor(d, 'A', agent).some((l) => l.text.includes('ci settled success'));
+    await wait('behind');
+    await wait('named', pushed.slice(0, 7));
+    expect([caught('behind'), caught('named')]).toEqual([false, false]);
+    await wait('wins', old.slice(0, 7));
+    remote = old;
+    await wait('caught');
+    expect([caught('wins'), caught('caught')]).toEqual([true, true]);
     await d.stop();
   });
 

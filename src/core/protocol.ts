@@ -18,6 +18,8 @@ export type SubscribeBody = {
   tags?: string[];
   bots?: boolean;
   until?: Until;
+  // a pr subscription's head as the caller pushed it: a verdict already settled on another head is not caught up
+  sha?: string;
   session: string;
   agent?: string;
 };
