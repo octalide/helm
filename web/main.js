@@ -1,5 +1,5 @@
 import { installTooltip } from './charts.js';
-import { $, api, ATTENTION, el, filter, FILTERS, go, href, local, parseRoute, repoShort, sessionName, setQuery, store, tickTimes } from './core.js';
+import { $, api, ATTENTION, el, filter, FILTERS, go, href, local, parseRoute, PHASE, repoShort, sessionName, setQuery, store, tickTimes } from './core.js';
 import { renderDrawer } from './drawer.js';
 import { installPalette, openPalette } from './palette.js';
 import { agents, routing } from './view-agents.js';
@@ -15,7 +15,7 @@ const open = (f) => f.work.filter((w) => w.phase !== 'done');
 // the views, in nav order; key is the digit that opens it, badge what the nav shows beside it
 const VIEWS = [
   { id: 'overview', label: 'Overview', key: '1', icon: 'grid', draw: overview },
-  { id: 'board', label: 'Board', key: '2', icon: 'cols', draw: board, badge: (f) => open(f).filter((w) => w.phase !== 'queued').length },
+  { id: 'board', label: 'Board', key: '2', icon: 'cols', draw: board, badge: (f) => open(f).filter((w) => w.phase !== 'queued' && w.phase !== 'parked').length },
   { id: 'epics', label: 'Epics', key: '3', icon: 'tree', draw: epics, badge: (f) => (f.tree || []).length },
   { id: 'timeline', label: 'Timeline', key: '4', icon: 'gantt', draw: timeline },
   { id: 'ci', label: 'CI', key: '5', icon: 'ci', draw: ci, badge: (f) => Object.values(f.repos).reduce((a, v) => a + (v.forge ? v.forge.runs.filter((r) => r.state === 'queued' || r.state === 'running').length : 0), 0), live: true },
@@ -152,7 +152,7 @@ function renderSummary() {
   const g = f.rates.graphql;
   const core = f.rates.core;
   $('summary').replaceChildren(
-    el('span', {}, el('b', {}, o.filter((w) => !ATTENTION.has(w.phase) && w.phase !== 'queued').length), ' active'),
+    el('span', {}, el('b', {}, o.filter((w) => PHASE[w.phase].group === 'active').length), ' active'),
     att ? el('a', { class: 'bad', href: href('board', '', { phase: null }) }, el('b', {}, att), ' attention') : '',
     waiting ? el('a', { class: 'bad', href: href('inbox') }, el('b', {}, waiting), ' waiting on you') : '',
     core ? el('span', { class: 'dim', title: 'REST calls left this hour' }, `rest ${core.remaining}`) : '',

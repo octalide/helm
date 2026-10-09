@@ -8,7 +8,7 @@ export const SNAPSHOT_QUERY = `query($owner:String!,$name:String!){
     issues(states:OPEN,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
       number title url createdAt updatedAt author{login __typename}
       labels(first:20){nodes{name}} assignees(first:5){nodes{login}}
-      parent{number repository{nameWithOwner}} subIssuesSummary{total completed}
+      parent{number repository{nameWithOwner}} subIssuesSummary{total completed} issueDependenciesSummary{blockedBy}
       comments(last:1){totalCount nodes{${NOTE}}}
     }}
     closedIssues:issues(states:CLOSED,first:20,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
@@ -68,6 +68,8 @@ type GqlIssue = {
   assignees?: GqlConnection<{ login: string }>;
   parent?: { number: number; repository: { nameWithOwner: string } } | null;
   subIssuesSummary?: { total: number; completed: number };
+  // blockedBy counts the open issues blocking it, totalBlockedBy the closed ones too
+  issueDependenciesSummary?: { blockedBy: number };
   comments: GqlCount<GqlNote>;
 };
 
@@ -176,6 +178,7 @@ function issue(i: GqlIssue, state: 'open' | 'closed'): Issue {
     assignees: (i.assignees?.nodes ?? []).map((a) => a.login),
     ...(i.parent ? { parent: { repo: i.parent.repository.nameWithOwner, number: i.parent.number } } : {}),
     ...(summary(i.subIssuesSummary)),
+    ...(i.issueDependenciesSummary?.blockedBy ? { blockedBy: i.issueDependenciesSummary.blockedBy } : {}),
     comments: i.comments.totalCount ?? 0,
     ...(i.comments.nodes?.[0] ? { lastComment: note(i.comments.nodes[0]) } : {}),
     createdAt: i.createdAt,

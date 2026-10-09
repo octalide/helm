@@ -23,6 +23,8 @@ export type Issue = {
   assignees: string[];
   parent?: IssueRef;
   subIssues?: { total: number; done: number };
+  // open issues it is blocked by, as github's issue dependencies record them; read for open issues only
+  blockedBy?: number;
   comments: number;
   lastComment?: Note;
   createdAt: string;
@@ -218,7 +220,8 @@ export type Work = {
   finished?: { at: number; how: 'merged' | 'closed' | 'abandoned' };
 };
 
-export type Phase = 'queued' | 'working' | 'draft' | 'ci' | 'failing' | 'ready' | 'blocked' | 'stalled' | 'done';
+// parked: set aside on purpose (a blocked or parked label, or an open blocked-by) with nobody on it
+export type Phase = 'queued' | 'working' | 'draft' | 'ci' | 'failing' | 'ready' | 'blocked' | 'stalled' | 'parked' | 'done';
 
 // a work item joined with what the forge, the machine and the ledger say about it now
 export type WorkView = Work & {
@@ -246,6 +249,8 @@ export type Rollup = {
   // ready to merge, also counted active
   ready: number;
   queued: number;
+  // set aside on purpose; neither active nor attention
+  parked: number;
   // open with nobody on it
   unowned: number;
 };
@@ -285,6 +290,8 @@ export type Decision = {
   answer?: Answer;
   // a condition helmd raised and clears itself once it no longer holds
   key?: string;
+  // what held when it was raised; a dismissal holds against it until the condition changes or ends
+  condition?: string;
   createdAt: number;
   updatedAt: number;
 };

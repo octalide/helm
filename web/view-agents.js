@@ -104,6 +104,7 @@ export function routing(main) {
                     { value: g('active'), tone: 'work', label: 'active' },
                     { value: g('attention'), tone: 'bad', label: 'needs attention' },
                     { value: g('queued'), tone: 'queued', label: 'queued', hatch: true },
+                    { value: g('parked'), tone: 'parked', label: 'parked' },
                   ],
                   mine.length || 1,
                 ),
