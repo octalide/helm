@@ -275,6 +275,9 @@ export type DecisionKind = 'routing' | 'question' | 'choice' | 'stall' | 'failur
 
 export type Answer = { text: string; option?: string; by: string; at: number };
 
+// who a decision is for: the person, or the session that owns the work it concerns
+export type Audience = 'person' | 'session';
+
 export type Decision = {
   id: string;
   kind: DecisionKind;
@@ -283,9 +286,14 @@ export type Decision = {
   title: string;
   body: string;
   options?: string[];
-  // true when someone is stopped until it is answered; false for review of what was decided without the person
+  // true when someone is stopped until it is answered
   blocking: boolean;
   from?: { session: string; agent?: string };
+  to: Audience;
+  // the session it is addressed to, set exactly when to is session
+  session?: string;
+  // handed on to the person: by the session it was addressed to, or by helm once that session is gone
+  escalated?: { by: string; note?: string; at: number };
   state: 'open' | 'answered' | 'dismissed' | 'resolved';
   answer?: Answer;
   // a condition helmd raised and clears itself once it no longer holds

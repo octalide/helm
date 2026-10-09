@@ -41,6 +41,24 @@ describe('daemon', () => {
     await d.stop();
   });
 
+  it('tells the fleet of a decision once it is the person\'s, not while a session holds it', async () => {
+    const { d } = await daemon();
+    d.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    d.register({ id: 'C', cwd: '/', role: 'coordinator' });
+    d.ledger.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'x' }, 'one');
+    const heard = () => lettersFor(d, 'C').map((l) => l.text).join('\n');
+    const q = d.decide({ kind: 'question', repo: 'o/r', issue: 1, title: 'which', body: '', blocking: true, from: { session: 'A', agent: 'x' } });
+    expect(heard()).not.toContain(`decision ${q.id} `);
+    d.escalate(q.id, { by: 'session A', note: 'needs the person' });
+    expect(heard()).toContain(`decision ${q.id} escalated to the person by session A (question) o/r#1: which\n  needs the person`);
+    const s = d.decide({ kind: 'stall', repo: 'o/r', issue: 1, title: 'stalled', body: '', blocking: false });
+    expect(s.to).toBe('session');
+    d.endSession('A');
+    expect(d.ledger.data.decisions[s.id]!.to).toBe('person');
+    expect(heard()).toContain(`decision ${s.id} escalated to the person by helm (stall)`);
+    await d.stop();
+  });
+
   it('polls a repository at once when an agent reports on its work', async () => {
     const asked: string[] = [];
     const gh = {
