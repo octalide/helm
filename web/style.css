@@ -399,10 +399,10 @@ a.rd:hover { text-decoration: none; transform: translateY(-1px); }
 
 /* activity */
 .feed { display: grid; }
-.ev { display: grid; grid-template-columns: 48px 64px minmax(0, 1fr); gap: 10px; padding: 6px 2px; border-bottom: 1px solid var(--line); font-size: 13px; align-items: baseline; }
+.ev { display: grid; grid-template-columns: 72px 84px minmax(0, 1fr); gap: 10px; padding: 6px 2px; border-bottom: 1px solid var(--line); font-size: 13px; align-items: baseline; }
 .ev:last-child { border-bottom: 0; }
-.ev-time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-.ev-kind { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-2); font-weight: 650; }
+.ev-time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ev-kind { white-space: nowrap; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-2); font-weight: 650; }
 .ev-kind::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; background: var(--queued); }
 .k-work .ev-kind::before { background: var(--work); }
 .k-epic .ev-kind::before { background: var(--done); }
