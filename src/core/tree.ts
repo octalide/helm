@@ -5,7 +5,7 @@ const ATTENTION: ReadonlySet<Phase> = new Set(['blocked', 'failing', 'stalled'])
 
 const keyOf = (repo: RepoName, number: number) => `${repo}#${number}`;
 
-export const emptyRollup = (): Rollup => ({ total: 0, done: 0, active: 0, attention: 0, ci: 0, ready: 0, queued: 0, unowned: 0 });
+export const emptyRollup = (): Rollup => ({ total: 0, done: 0, active: 0, attention: 0, ci: 0, ready: 0, queued: 0, parked: 0, unowned: 0 });
 
 export function addRollup(into: Rollup, r: Rollup): Rollup {
   for (const k of Object.keys(into) as (keyof Rollup)[]) into[k] += r[k];
@@ -16,7 +16,7 @@ export function addRollup(into: Rollup, r: Rollup): Rollup {
 export const percent = (r: Rollup): number => (r.total === 0 ? 0 : Math.round((100 * r.done) / r.total));
 
 export function rollupText(r: Rollup): string {
-  const parts = [`${r.done}/${r.total} done (${percent(r)}%)`, r.active ? `${r.active} active` : '', r.ci ? `${r.ci} in ci` : '', r.ready ? `${r.ready} ready` : '', r.attention ? `${r.attention} need attention` : '', r.queued ? `${r.queued} queued` : '', r.unowned ? `${r.unowned} unowned` : ''];
+  const parts = [`${r.done}/${r.total} done (${percent(r)}%)`, r.active ? `${r.active} active` : '', r.ci ? `${r.ci} in ci` : '', r.ready ? `${r.ready} ready` : '', r.attention ? `${r.attention} need attention` : '', r.queued ? `${r.queued} queued` : '', r.parked ? `${r.parked} parked` : '', r.unowned ? `${r.unowned} unowned` : ''];
   return parts.filter(Boolean).join(' · ');
 }
 
@@ -27,6 +27,7 @@ function leafRollup(state: 'open' | 'closed', phase: Phase | undefined, owned: b
   else if (phase && ACTIVE.has(phase)) r.active = 1;
   else if (phase && ATTENTION.has(phase)) r.attention = 1;
   else if (phase === 'queued') r.queued = 1;
+  else if (phase === 'parked') r.parked = 1;
   if (phase === 'ci') r.ci = 1;
   if (phase === 'ready') r.ready = 1;
   if (r.done === 0 && !owned) r.unowned = 1;

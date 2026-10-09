@@ -53,6 +53,7 @@ export function rollupSegments(r) {
     { value: working, tone: 'work', label: 'being worked' },
     { value: r.attention, tone: 'bad', label: 'needs attention' },
     { value: r.queued, tone: 'queued', label: 'queued', hatch: true },
+    { value: r.parked || 0, tone: 'parked', label: 'parked' },
   ];
 }
 
@@ -67,6 +68,7 @@ export const ROLLUP_LEGEND = [
   ['work', 'worked'],
   ['bad', 'attention'],
   ['queued hatch', 'queued'],
+  ['parked', 'parked'],
   ['track', 'unowned'],
 ];
 

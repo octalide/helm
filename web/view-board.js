@@ -9,6 +9,7 @@ const COLUMNS = [
   { id: 'ci', label: 'In CI', phases: ['ci'], tone: 'ci' },
   { id: 'ready', label: 'Ready', phases: ['ready'], tone: 'ready' },
   { id: 'attention', label: 'Attention', phases: ['blocked', 'failing', 'stalled'], tone: 'bad' },
+  { id: 'parked', label: 'Parked', phases: ['parked'], tone: 'parked' },
   { id: 'done', label: 'Done', phases: ['done'], tone: 'done' },
 ];
 

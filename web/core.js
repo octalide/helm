@@ -96,7 +96,7 @@ export const ext = (href, ...kids) => el('a', { href, target: '_blank', rel: 'no
 export const issueUrl = (repo, n) => `https://github.com/${repo}/issues/${n}`;
 
 // the phases in pipeline order, each with the color token it draws in and the group it counts under
-export const PHASES = ['queued', 'working', 'draft', 'ci', 'ready', 'failing', 'blocked', 'stalled', 'done'];
+export const PHASES = ['queued', 'working', 'draft', 'ci', 'ready', 'failing', 'blocked', 'stalled', 'parked', 'done'];
 export const PHASE = {
   queued: { label: 'queued', tone: 'queued', group: 'queued' },
   working: { label: 'working', tone: 'work', group: 'active' },
@@ -106,10 +106,11 @@ export const PHASE = {
   failing: { label: 'failing', tone: 'bad', group: 'attention' },
   blocked: { label: 'blocked', tone: 'bad', group: 'attention' },
   stalled: { label: 'stalled', tone: 'warn', group: 'attention' },
+  parked: { label: 'parked', tone: 'parked', group: 'parked' },
   done: { label: 'done', tone: 'done', group: 'done' },
 };
 export const ATTENTION = new Set(['failing', 'blocked', 'stalled']);
-export const RANK = { blocked: 0, failing: 1, stalled: 2, ready: 3, ci: 4, draft: 5, working: 6, queued: 7, done: 8 };
+export const RANK = { blocked: 0, failing: 1, stalled: 2, ready: 3, ci: 4, draft: 5, working: 6, queued: 7, parked: 8, done: 9 };
 
 export const phasePill = (p) => el('span', { class: `pill t-${PHASE[p]?.tone || 'queued'}` }, PHASE[p]?.label || p);
 

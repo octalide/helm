@@ -48,8 +48,8 @@ describe('pane', () => {
   });
 
   it('shows epics touching the session with their rollup and what moves under them', () => {
-    const leaf = (n: number, phase?: WorkView['phase']): TreeNode => ({ repo: 'o/r', number: n, title: `c${n}`, url: '', state: phase === 'done' ? 'closed' : 'open', ...(phase ? { phase } : {}), children: [], rollup: { total: 1, done: phase === 'done' ? 1 : 0, active: phase === 'working' ? 1 : 0, attention: 0, ci: 0, ready: 0, queued: 0, unowned: phase ? 0 : 1 } });
-    const root: TreeNode = { ...leaf(9), title: 'epic: big', children: [leaf(1, 'done'), leaf(2, 'working'), leaf(3)], rollup: { total: 3, done: 1, active: 1, attention: 0, ci: 0, ready: 0, queued: 0, unowned: 1 } };
+    const leaf = (n: number, phase?: WorkView['phase']): TreeNode => ({ repo: 'o/r', number: n, title: `c${n}`, url: '', state: phase === 'done' ? 'closed' : 'open', ...(phase ? { phase } : {}), children: [], rollup: { total: 1, done: phase === 'done' ? 1 : 0, active: phase === 'working' ? 1 : 0, attention: 0, ci: 0, ready: 0, queued: 0, parked: 0, unowned: phase ? 0 : 1 } });
+    const root: TreeNode = { ...leaf(9), title: 'epic: big', children: [leaf(1, 'done'), leaf(2, 'working'), leaf(3)], rollup: { total: 3, done: 1, active: 1, attention: 0, ci: 0, ready: 0, queued: 0, parked: 0, unowned: 1 } };
     const rows = text(paneRows(fleet({ tree: [root] }), self, opts({ tab: 'epics' })));
     expect(rows[2]).toBe(' 33% r#9 big');
     expect(rows[3]).toMatch(/^ {5}━+─+ 1\/3$/);
