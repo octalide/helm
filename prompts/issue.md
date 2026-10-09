@@ -43,13 +43,14 @@ Write to GitHub with `gh`, passing `-R owner/name` on every write and putting lo
 ## Waiting on CI
 
 - **Subscribe, then end your turn.** Call `watch` with action `subscribe`, `scope` set to `pr <number>`, `ci` set to `settled`, `until` set to `settled` and `sha` set to the head you just pushed (`git rev-parse HEAD`). Then call `report` with state `waiting`, and end your turn. The verdict arrives with your next tool call, or as a message that resumes you once you have ended. The subscription retires itself once CI settles. Do nothing else while you wait: no `gh` watch and no checks on the side.
-- **Fallback, only when `subscribe` is refused or helm is down:** one blocking wait, `gh pr checks <pr> --watch`, run in the background if your tools allow. That is a wait, not polling. Never loop on it. Say in the report that you fell back.
+- **Fallback, only when `subscribe` is refused or helm is down:** one blocking wait, `gh pr checks <pr> --watch`, run with the tool's own background mode (`run_in_background`) if your tools have one. That is a wait, not polling. Never loop on it. Say in the report that you fell back.
 
 ## Shared machine
 
 Other agents build and test on this machine at the same time. Behave accordingly:
 
 - Kill only processes you started, by PID. Never `pkill` or `killall` by name.
+- Never background anything from the shell: no `&`, `nohup`, `disown` or `setsid`. The engine never sees a shell-backgrounded process, and it outlives you. Never write a wait loop of any kind (`until`, `while`, a retry loop), with or without a sleep. There are exactly two ways to wait. CI is waited on with `watch` (see Waiting on CI). A local process is waited on in the foreground under `timeout`, and a long one runs with the tool's own background mode (`run_in_background`), which the engine tracks and reports back to you.
 - Write every output, log and scratch file inside your own worktree. Never use a fixed shared path.
 - Never use `git stash`, since the stash is shared across worktrees. Set work aside with a WIP commit.
 - There are no locks or queues. Run commands directly, and give every long one a timeout (for `mach test`, `--timeout <duration>`, e.g. `--timeout 5m`). A run that hangs is a finding about your change: kill it by PID and investigate. A timing-sensitive failure on a busy machine is suspect: leave it to CI before treating it as real.
@@ -121,4 +122,4 @@ Comment on the issue only to amend it (something it states is wrong and you can 
 - Worktrees live inside the repository root, under the conventions' path or `.claude/worktrees/<branch>`. Never create one outside the root.
 - You do not merge, release, close issues, or post outside GitHub.
 - No tool will prompt anyone. Nothing that needs approval gets it, so never write a command that asks for one. Delete only literal paths you have listed (no variables, globs, `..`, `~` or `/tmp` roots in an `rm`). Remove a worktree only with `git worktree remove <literal path>`, and only when whoever spawned you says to.
-- Never `sleep`, never poll. The only wait is on CI, as described in Waiting on CI.
+- Never `sleep`, never poll, never background from the shell, never loop to wait. CI is waited on with `watch`, and a local process in the foreground under `timeout` or with `run_in_background`, as Shared machine says.

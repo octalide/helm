@@ -48,7 +48,8 @@ export function workLine(v: WorkView, home?: string): string {
     v.report ? `reported ${v.report.state}${v.report.note ? `: ${v.report.note}` : ''}` : '',
   ].filter(Boolean);
   const next = v.plan?.find((p) => !p.done);
-  return `${v.repo}#${v.issue} [${v.phase}] ${v.title}\n  ${parts.join(' · ')}${next ? `\n  next: ${next.text}` : ''}`;
+  const left = (v.leftovers ?? []).map((p) => `\n  left running: pid ${p.pid} ${p.command}`).join('');
+  return `${v.repo}#${v.issue} [${v.phase}] ${v.title}\n  ${parts.join(' · ')}${next ? `\n  next: ${next.text}` : ''}${left}`;
 }
 
 // the hierarchy as an indented outline, each epic with what its subtree adds up to

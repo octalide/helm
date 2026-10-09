@@ -1,4 +1,5 @@
 import type { Check, ForgeState, Issue, Pull, Run } from '../src/core/types.ts';
+import type { ProcTable } from '../src/daemon/procs.ts';
 
 export const T0 = Date.parse('2026-10-01T12:00:00Z');
 export const iso = (ms: number) => new Date(ms).toISOString();
@@ -39,3 +40,11 @@ export function run(id: number, over: Partial<Run> = {}): Run {
 export function forge(over: Partial<ForgeState> = {}): ForgeState {
   return { repo: 'o/r', defaultBranch: 'dev', issues: [], pulls: [], runs: [], children: {}, polledAt: T0, ...over };
 }
+// a process table of pid -> [cwd, cmdline]; an absent cwd is a process not readable by this user
+// live is the table itself, so a test can end a process
+export const table = (live: Record<number, [string | undefined, string]>): ProcTable & { live: typeof live } => ({
+  live,
+  pids: async () => Object.keys(live).map(Number),
+  cwd: async (pid) => live[pid]?.[0],
+  command: async (pid) => live[pid]?.[1],
+});

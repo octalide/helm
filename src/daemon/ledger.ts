@@ -1,6 +1,6 @@
 import type { ClaimBody, DecisionBody, QueueBody, RegisterBody, ReportBody, SubscribeBody } from '../core/protocol.ts';
 import { workKey } from '../core/protocol.ts';
-import type { AgentRecord, Answer, Decision, HelmEvent, Letter, Phase, Session, SessionRole, Subscription, Work } from '../core/types.ts';
+import type { AgentRecord, Answer, Decision, HelmEvent, Leftover, Letter, Phase, Session, SessionRole, Subscription, Work } from '../core/types.ts';
 
 // bumped when the stored shape changes; an older file is migrated or refused, never read as this one
 export const LEDGER_VERSION = 1;
@@ -259,6 +259,18 @@ export class Ledger {
     history.push({ phase, at: this.now() });
     if (history.length > HISTORY_KEEP) history.splice(0, history.length - HISTORY_KEEP);
     this.changed();
+  }
+
+  // what an ended agent left running in the work's worktree, replaced at each ending
+  leftovers(repo: string, issue: number, found: Leftover[]): Work | undefined {
+    const w = this.data.work[workKey(repo, issue)];
+    if (!w) return undefined;
+    if (JSON.stringify(w.leftovers ?? []) === JSON.stringify(found)) return w;
+    if (found.length) w.leftovers = found;
+    else delete w.leftovers;
+    w.updatedAt = this.now();
+    this.changed();
+    return w;
   }
 
   // at is when it finished, when that was before now: a close helm learns of late
