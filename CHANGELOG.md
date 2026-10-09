@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.0
+
+- A repo session takes over the unfinished work its repository's gone sessions left: backlog order, claims, subscriptions, and the decisions that were theirs or went to the person only because they were gone. It hears one `[helm adopted]` delivery listing what to dispatch again. After a `/clear` or an in-process resume the old session id is handed over exactly (#81).
+- A session starts or replaces helmd from the newest helm installed beside its mod that speaks its protocol, not from its own version, so whichever session starts it lands on the newest. `helmd restart` hands over without a gap: the new daemon takes the lock and the socket while the old one still answers (#79).
+
 ## 0.4.1
 
 - The web page's Activity view lists events again. Links between views no longer carry one view's own parameters (the inbox's `kind` was filtering Activity to nothing), and the Repos view's repository tabs no longer narrow every other view (#64, #74).
