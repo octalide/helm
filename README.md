@@ -44,21 +44,21 @@ local git (worktrees, branches) ─┤
 A session in a repository is a **repo** session for it. Set the role with `HELM_ROLE=coordinator|repo|other` at launch, or with `/helm role coordinator`.
 
 - **Repo session.** Owns a repository's issues. It queues them with `backlog`, starts agents with `dispatch`, and hears its own work move (`[helm work]` deliveries) without polling.
-- **Coordinator.** Sees the fleet (`view` with `what: fleet` or `what: tree`), hears each epic's progress, every decision and any work that needs someone, and talks to repository sessions with SendMessage.
-- **Issue agent.** Started only by `dispatch`. It reports as it goes, its plan with each step's progress among it, waits on CI by subscribing and ending its turn, and stops with a question that lands in the decision inbox. The answer resumes it.
+- **Coordinator.** Sees the fleet (`view` with `what: fleet` or `what: tree`), hears each epic's progress, every decision for the person and any work that needs someone, and talks to repository sessions with SendMessage.
+- **Issue agent.** Started only by `dispatch`. It reports as it goes, its plan with each step's progress among it, waits on CI by subscribing and ending its turn, and stops with a question that goes to the session that owns its work, which answers it or escalates it to the person. The answer resumes it.
 
 ## Tools
 
 | tool | does |
 |---|---|
-| `status` | this session's role, work, open decisions, subscriptions and letters in flight |
+| `status` | this session's role, work, the decisions addressed to it and its own waiting on the person, subscriptions and letters in flight |
 | `view` | work, fleet, tree (epics and sub-issues with progress rolled up), issues, issue, prs, pr (with live jobs), runs, worktrees, branches, decisions, sessions, from the shared cache |
 | `log` | a CI job's log trimmed to its errors, a grep or a tail; or every failed job of a run |
 | `watch` | subscribe to a repository, issue, PR, branch, run or tag. A subagent's subscription delivers to that subagent |
-| `report` | where an agent's work stands: working (claims the issue), waiting, blocked with a question, ready, stopped, abandoned, plus its plan and choices made without the person |
+| `report` | where an agent's work stands: working (claims the issue), waiting, blocked with a question, ready, stopped, abandoned, plus its plan and choices made without the person, recorded for review |
 | `dispatch` | start an issue agent per issue: claim, route to a tier, spawn, log the pick |
 | `backlog` | the session's queue of issues |
-| `decide` | list, answer or dismiss decisions |
+| `decide` | list, answer, escalate to the person or dismiss decisions |
 
 `/helm` shows the session's binding, and `/helm pane`, `/helm web`, `/helm role …` and `/helm restart` do what they say.
 
@@ -71,7 +71,7 @@ A session in a repository is a **repo** session for it. Set the role with `HELM_
 | `1` | Work | the session's work, or for a coordinator every session's: a bar of it by phase, then each item with its plan progress and next step, its checks with the running step or the failed checks, and its agent, tier and PR |
 | `2` | Epics | each epic touching the session, with its percent, rollup bar and counts, and the work moving under it |
 | `3` | CI | runs in flight with their job bar and running steps, then runs finished in the last half hour |
-| `4` | Inbox | the session's open decisions; an option answers one in place, and `dismiss` or `reviewed` closes it. A written answer goes on the web page |
+| `4` | Inbox | what is addressed to this session: its agents' questions and its stalls, and for a coordinator the person's decisions too; an option answers one in place, `escalate` hands it to the person and `dismiss` closes it. A written answer goes on the web page |
 
 Above the prompt, one line appears while something needs you, and the status line counts work in progress.
 
@@ -83,7 +83,7 @@ CI arrives as one verdict per PR head (`ci settled success` or `failure`, naming
 
 ## Phases
 
-Work moves through `queued → working → draft → ci → ready → done`, with `failing`, `blocked`, `stalled` and `parked` beside them. Phases are derived, not set: from the agent's reports, whether its agent is alive, the PR that closes the issue or sits on its branch, that PR's checks, and the issue's labels and dependencies. A stalled item (no live agent, work not done) and a stalled or failing CI raise a decision on their own, and clear it once the condition passes. A dismissed one stays dismissed until its condition changes (a new PR head, a different agent, a different phase) or ends. Work set aside on purpose, labelled `blocked` or `parked` or blocked by an open issue, is `parked` while nobody is on it: it raises nothing and needs no attention. A report polls its repository at once, so the phase keeps up with what the agent just did.
+Work moves through `queued → working → draft → ci → ready → done`, with `failing`, `blocked`, `stalled` and `parked` beside them. Phases are derived, not set: from the agent's reports, whether its agent is alive, the PR that closes the issue or sits on its branch, that PR's checks, and the issue's labels and dependencies. A stalled item (no live agent, work not done) and a stalled or failing CI raise a decision on their own, and clear it once the condition passes. A stall goes to the session that owns the work, and to the person once that session is gone, and a failing long-lived branch goes to the person. A dismissed one stays dismissed until its condition changes (a new PR head, a different agent, a different phase) or ends. Work set aside on purpose, labelled `blocked` or `parked` or blocked by an open issue, is `parked` while nobody is on it: it raises nothing and needs no attention. A report polls its repository at once, so the phase keeps up with what the agent just did.
 
 ## Hierarchy
 
@@ -93,7 +93,7 @@ Each work item keeps when it entered each phase, and finished work stays 30 days
 
 ## Routing
 
-`dispatch` sends each issue to a **tier**: a model and an effort with a description of the work that belongs there. The judge (`claude-haiku-5-5` by default) reads the issue against the tiers and answers a tier, a confidence and a reason. Each pick is logged as a decision for review, and answering it with another tier reroutes the issue. Name a tier in `dispatch` to skip the judge. A session registers an agent type for every tier and for the model and effort of every work item it owns, so an agent dispatched on a tier since removed can still be resumed. A session picks up a changed tier table on `/reload-plugins`.
+`dispatch` sends each issue to a **tier**: a model and an effort with a description of the work that belongs there. The judge (`claude-haiku-5-5` by default) reads the issue against the tiers and answers a tier, a confidence and a reason. Each pick is recorded for review, a record that waits on nobody, and answering it with another tier reroutes the issue. Name a tier in `dispatch` to skip the judge. A session registers an agent type for every tier and for the model and effort of every work item it owns, so an agent dispatched on a tier since removed can still be resumed. A session picks up a changed tier table on `/reload-plugins`.
 
 The default tiers:
 
@@ -120,11 +120,12 @@ A judge answer that names no tier falls back to `routing.fallback`, `standard` b
 | CI | runs in flight with every job and step, pass rate and run length, each workflow's recent outcomes, and failed runs with their logs |
 | Agents | each live session's agents, their model and effort, and the work each is on |
 | Routing | picks per tier by outcome, the judge's confidence, and every pick with its reason |
-| Inbox | decisions: questions agents are stopped on, choices made without you, routing picks and stalls, each answered or dismissed in place |
+| Inbox | what is yours to decide, each card marked for you: questions sessions hand on or ask themselves, stalls and failures nobody else owns, answered or dismissed in place. Below, muted and never counted, what sessions are handling, each naming its session, so you can read it or step in |
+| Review | records of what was decided without you, newest first: choices agents and sessions made, which take feedback or are marked reviewed, and routing picks, which can still be rerouted |
 | Repos | each repository's PRs, issues, runs, worktrees and branches, and the GitHub budget left |
 | Activity | every event by day, by kind |
 
-Clicking a work item opens its detail: its phases with how long each took, its plan, CI, routing, decisions and worktree. Filters for repository, session, epic and tier, plus a search, apply to every view and live in the URL, so a filtered view can be bookmarked. `ctrl k` opens a palette that jumps to any view, issue, epic, repository or session. The digits open the views, `/` searches, `j` and `k` walk the cards, `t` toggles the theme, and `?` lists the keys.
+Clicking a work item opens its detail: its phases with how long each took, its plan, CI, routing, decisions and worktree. Filters for repository, session, epic and tier, plus a search, apply to every view and live in the URL, so a filtered view can be bookmarked. `ctrl k` opens a palette that jumps to any view, issue, epic, repository or session. The digits open the views and `r` opens Review, `/` searches, `j` and `k` walk the cards, `t` toggles the theme, and `?` lists the keys.
 
 The page is served on 127.0.0.1 only. A request must name this server as its Host, and a write must come from this page.
 
