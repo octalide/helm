@@ -47,6 +47,13 @@ describe('daemon', () => {
     await d.stop();
   });
 
+  it('titles a claim by the issue the caller read when the forge cache has not seen it', async () => {
+    const { d } = await daemon();
+    d.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    expect(d.claim({ session: 'A', repo: 'o/r', issue: 7, title: 'fresh issue' }).title).toBe('fresh issue');
+    await d.stop();
+  });
+
   it('polls a repository at once when an agent reports on its work', async () => {
     const asked: string[] = [];
     const gh = {
