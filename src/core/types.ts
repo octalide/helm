@@ -341,6 +341,9 @@ export type Subscription = {
   // verdict; guessed from the local checkout, which can itself be stale, only ci on a head strictly behind it is not
   head?: string;
   named?: boolean;
+  // the pr head whose settled ci this subscription held back, seen again by a later poll once that head stays: the
+  // verdict it waits on can then no longer come, and the wait no longer counts as work going on
+  held?: { sha: string; seen?: true };
   session: string;
   agent?: string;
   createdAt: number;

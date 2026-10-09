@@ -11,7 +11,7 @@ const exec = promisify(execFile);
 export type Git = (cwd: string, args: string[]) => Promise<string>;
 
 export const git: Git = async (cwd, args) => {
-  const { stdout } = await exec('git', ['-C', cwd, ...args], { timeout: 30_000, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } });
+  const { stdout } = await exec('git', ['-C', cwd, ...args], { timeout: 30_000, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' } });
   return stdout;
 };
 
