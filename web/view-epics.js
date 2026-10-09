@@ -1,5 +1,5 @@
 import { legend, meter, rollupBar, ROLLUP_LEGEND } from './charts.js';
-import { el, empty, ext, href, keyOf, phasePill, plural, repoShort, store, visibleTree } from './core.js';
+import { el, empty, ext, fill, href, keyOf, phasePill, plural, repoShort, store, visibleTree } from './core.js';
 
 // nodes the viewer folded, kept across redraws
 const folded = new Set();
@@ -69,16 +69,16 @@ export function epics(main) {
   const arg = store.route.arg;
   if (arg) {
     const hit = find(store.fleet.tree || [], arg);
-    if (!hit) return main.replaceChildren(empty(`${arg} is in no epic helm sees.`, el('a', { href: href('epics') }, 'All epics')));
+    if (!hit) return fill(main, empty(`${arg} is in no epic helm sees.`, el('a', { href: href('epics') }, 'All epics')));
     const n = hit.node;
     const rows = n.children.flatMap((c) => nodeRow(c, 0, n.repo));
-    return main.replaceChildren(header(n, hit.path), el('section', { class: 'panel' }, rows.length ? table(rows) : empty('No sub-issues read yet.')));
+    return fill(main, header(n, hit.path), el('section', { class: 'panel' }, rows.length ? table(rows) : empty('No sub-issues read yet.')));
   }
-  if (!tree.length) return main.replaceChildren(empty('No epics.', 'An open issue with sub-issues in a watched repository is an epic. Sub-issues in other repositories nest under it.'));
+  if (!tree.length) return fill(main, empty('No epics.', 'An open issue with sub-issues in a watched repository is an epic. Sub-issues in other repositories nest under it.'));
   const total = tree.reduce((a, t) => a + t.rollup.total, 0);
   const doneN = tree.reduce((a, t) => a + t.rollup.done, 0);
   const tools = el('div', { class: 'toolbar' }, el('span', { class: 'dim' }, `${plural(tree.length, 'epic')} · ${doneN}/${total} leaves done`), el('span', { class: 'grow' }), legend(ROLLUP_LEGEND), el('button', { type: 'button', class: 'chip-btn', onclick: () => (tree.forEach((t) => walkKeys(t, (k) => folded.add(k))), store.emit()) }, 'fold all'), el('button', { type: 'button', class: 'chip-btn', onclick: () => (folded.clear(), store.emit()) }, 'unfold all'));
-  main.replaceChildren(tools, el('section', { class: 'panel' }, table(tree.flatMap((t) => nodeRow(t, 0, '')))));
+  fill(main, tools, el('section', { class: 'panel' }, table(tree.flatMap((t) => nodeRow(t, 0, '')))));
 }
 
 function walkKeys(n, fn) {

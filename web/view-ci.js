@@ -1,5 +1,5 @@
 import { columns, stack } from './charts.js';
-import { at, done, dur, el, empty, ext, filter, passing, plural, repoShort, setQuery, store } from './core.js';
+import { at, done, dur, el, empty, ext, fill, filter, passing, plural, repoShort, setQuery, store } from './core.js';
 import { jobList, section } from './parts.js';
 
 const length = (r) => Date.parse(r.updatedAt) - Date.parse(r.createdAt);
@@ -122,5 +122,5 @@ export function ci(main) {
       : empty(failedOnly ? 'No failed runs.' : 'No finished runs.'),
   );
 
-  main.replaceChildren(tiles, flight, el('div', { class: 'grid two' }, health, durations), list);
+  fill(main, tiles, flight, el('div', { class: 'grid two' }, health, durations), list);
 }

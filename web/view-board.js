@@ -1,4 +1,4 @@
-import { el, empty, filter, keyOf, RANK, repoShort, sessionName, setQuery, store, visibleWork } from './core.js';
+import { el, empty, fill, filter, keyOf, RANK, repoShort, sessionName, setQuery, store, visibleWork } from './core.js';
 import { workCard } from './parts.js';
 
 // the board's columns, left to right; attention gathers the three phases that need someone
@@ -66,6 +66,6 @@ export function board(main) {
       grid.append(el('div', { class: 'bcol' }, items.map((w) => workCard(w, { view: 'board', pill: c.phases.length > 1 }))));
     }
   }
-  main.replaceChildren(controls, work.length ? el('div', { class: 'board-wrap' }, grid) : empty('No work matches.', 'Repository sessions queue issues with backlog and start them with dispatch.'));
+  fill(main, controls, work.length ? el('div', { class: 'board-wrap' }, grid) : empty('No work matches.', 'Repository sessions queue issues with backlog and start them with dispatch.'));
 }
 

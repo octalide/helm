@@ -1,5 +1,5 @@
 import { columns, legend, rollupBar, ROLLUP_LEGEND, spark, stack } from './charts.js';
-import { ATTENTION, at, done, el, empty, ext, href, keyOf, PHASE, PHASES, phasePill, phaseSince, plural, repoShort, store, visibleTree, visibleWork } from './core.js';
+import { at, ATTENTION, done, el, empty, ext, fill, href, keyOf, PHASE, phasePill, PHASES, phaseSince, plural, repoShort, store, visibleTree, visibleWork } from './core.js';
 import { section, where } from './parts.js';
 
 const DAY = 86400_000;
@@ -57,7 +57,7 @@ export function overview(main) {
     tile('Done this week', week, { icon: 'i-done', sub: `${per[per.length - 1].value} today`, spark: spark(per.map((d) => d.value)), tip: 'work merged or closed, per day over 14 days' }),
   );
 
-  main.replaceChildren(
+  fill(main, 
     tiles,
     el('div', { class: 'grid two' }, attentionPanel(attention, waiting, by('ready')), liveCi(runs, open)),
     el('div', { class: 'grid two' }, epicsPanel(), el('div', { class: 'col' }, pipelinePanel(open), throughputPanel(per))),

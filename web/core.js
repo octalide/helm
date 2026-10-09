@@ -17,6 +17,11 @@ export function el(tag, attrs, ...kids) {
   return n;
 }
 
+// a container's children replaced, flattened and with empty values skipped as el does
+export function fill(container, ...kids) {
+  container.replaceChildren(...kids.flat(Infinity).filter((k) => k !== undefined && k !== null && k !== false && k !== ''));
+}
+
 // keyed children: a node whose signature is unchanged is kept, so focus and a half-written answer survive a redraw
 export function patch(container, items, key, sig, draw) {
   const old = new Map([...container.children].map((n) => [n.dataset.key, n]));

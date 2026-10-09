@@ -1,5 +1,5 @@
 import { stack } from './charts.js';
-import { api, at, done, el, empty, ext, filter, local, passing, plural, repoShort, setQuery, store } from './core.js';
+import { api, at, done, el, empty, ext, fill, filter, local, passing, plural, repoShort, setQuery, store } from './core.js';
 import { ciBar, jobList, section, where } from './parts.js';
 
 const KINDS = ['question', 'choice', 'routing', 'stall', 'failure'];
@@ -10,7 +10,7 @@ export function inbox(main, reload) {
   const open = all.filter((d) => !kind || d.kind === kind).sort((a, b) => Number(b.blocking) - Number(a.blocking) || b.createdAt - a.createdAt);
   // the cards keep their place across redraws, so an answer being written keeps its focus
   if (main.dataset.view !== 'inbox' || !main.querySelector('#cards')) {
-    main.replaceChildren(el('div', { id: 'inbox-tools' }), el('div', { id: 'cards', class: 'cards' }), el('div', { id: 'inbox-settled' }));
+    fill(main, el('div', { id: 'inbox-tools' }), el('div', { id: 'cards', class: 'cards' }), el('div', { id: 'inbox-settled' }));
     main.dataset.view = 'inbox';
   }
   main.querySelector('#inbox-tools').replaceChildren(
@@ -103,7 +103,7 @@ export function repos(main) {
   const names = Object.keys(f.repos).sort();
   const repo = filter('repo') || (names.includes(local('repo')) ? local('repo') : names[0]);
   const view = REPO_VIEWS.includes(filter('tab')) ? filter('tab') : 'prs';
-  if (!repo) return main.replaceChildren(empty('No repository is watched yet.'));
+  if (!repo) return fill(main, empty('No repository is watched yet.'));
   local('repo', repo);
   const v = f.repos[repo];
   const forge = v && v.forge;
@@ -144,7 +144,7 @@ export function repos(main) {
   if (view === 'branches')
     rows = (loc ? loc.branches.slice(0, 80) : []).map((b) => el('div', { class: 'row' }, el('span', { class: 'grow mono' }, b.name), el('span', { class: b.gone ? 'status-bad' : 'dim' }, b.gone ? 'upstream gone' : b.upstream ? `${b.upstream}${b.ahead ? ` +${b.ahead}` : ''}${b.behind ? ` -${b.behind}` : ''}` : 'local only'), el('span', { class: 'dim' }, at(b.committedAt))));
   const rate = Object.entries(f.rates || {}).map(([pool, r]) => el('div', { class: 'rate' }, el('span', {}, pool), stack([{ value: r.remaining, tone: 'ready', label: `${pool} left this hour` }], r.limit, { size: 'thin', restLabel: 'used' }), el('span', { class: 'dim small' }, `${r.remaining}/${r.limit} · resets `, el('time', {}, new Date(r.resetAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })))));
-  main.replaceChildren(tabs, section(`${repo} · ${view}`, el('span', { class: 'count' }, rows.length || ''), rows.length ? el('div', { class: 'list' }, rows) : empty(`No ${view}.`)), section('GitHub budget', el('span', { class: 'dim small' }, 'helmd is the only caller'), el('div', { class: 'rates' }, rate)));
+  fill(main, tabs, section(`${repo} · ${view}`, el('span', { class: 'count' }, rows.length || ''), rows.length ? el('div', { class: 'list' }, rows) : empty(`No ${view}.`)), section('GitHub budget', el('span', { class: 'dim small' }, 'helmd is the only caller'), el('div', { class: 'rates' }, rate)));
 }
 
 const EVENT_KINDS = ['work', 'epic', 'decision', 'pr', 'issue', 'ci'];
@@ -161,7 +161,7 @@ export function activity(main) {
     if (!days.has(d)) days.set(d, []);
     days.get(d).push(e);
   }
-  main.replaceChildren(
+  fill(main, 
     tools,
     events.length
       ? [...days].map(([d, list]) =>
