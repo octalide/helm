@@ -282,6 +282,9 @@ export type DecisionKind = 'routing' | 'question' | 'choice' | 'stall' | 'failur
 
 export type Answer = { text: string; option?: string; by: string; at: number };
 
+// who a decision is for: the person, or the session that owns the work it concerns
+export type Audience = 'person' | 'session';
+
 export type Decision = {
   id: string;
   kind: DecisionKind;
@@ -290,9 +293,14 @@ export type Decision = {
   title: string;
   body: string;
   options?: string[];
-  // true when someone is stopped until it is answered; false for review of what was decided without the person
+  // true when someone is stopped until it is answered
   blocking: boolean;
   from?: { session: string; agent?: string };
+  to: Audience;
+  // the session it is addressed to, set exactly when to is session
+  session?: string;
+  // handed on to the person: by the session it was addressed to, or by helm once that session is gone
+  escalated?: { by: string; note?: string; at: number };
   state: 'open' | 'answered' | 'dismissed' | 'resolved';
   answer?: Answer;
   // a condition helmd raised and clears itself once it no longer holds
@@ -367,6 +375,16 @@ export type HelmEvent = {
   owner?: string;
   // the root epic a work event rolls up into, whose progress event speaks for it on the fleet scope
   epic?: string;
+  // a work event's phase change, which a later one of the same item supersedes
+  phase?: { from: Phase | 'new'; to: Phase; title: string };
+};
+
+// one event of a letter: the group it is listed under, [helm <head>], absent for a letter of its own words; its
+// lines; and for a phase change, the item and the phases it went through, which a newer part of the item extends
+export type LetterPart = {
+  head?: string;
+  lines: string[];
+  phase?: { key: string; path: string[]; title: string };
 };
 
 // one delivery to a session, or to one agent of it
@@ -374,7 +392,10 @@ export type Letter = {
   id: string;
   session: string;
   agent?: string;
+  // the parts rendered whole, what a reader without the parts shows
   text: string;
+  // absent on a letter posted before letters carried parts
+  parts?: LetterPart[];
   events: string[];
   subs: string[];
   at: number;
