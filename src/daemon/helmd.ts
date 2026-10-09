@@ -602,7 +602,7 @@ export class Daemon {
   }
 
   claim(b: ClaimBody): ReturnType<Ledger['claim']> {
-    const title = this.forgeOf(b.repo)?.issues.find((i) => i.number === b.issue)?.title;
+    const title = this.forgeOf(b.repo)?.issues.find((i) => i.number === b.issue)?.title ?? b.title;
     return this.ledger.claim(b, title);
   }
 

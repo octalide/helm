@@ -24,7 +24,8 @@ export type SubscribeBody = {
 
 export type QueueBody = { session: string; repo: RepoName; issues: number[] };
 
-export type ClaimBody = { session: string; repo: RepoName; issue: number; agent?: string; routing?: Routing; force?: boolean };
+// title: what the caller read of the issue, for when the forge cache has not seen it yet
+export type ClaimBody = { session: string; repo: RepoName; issue: number; title?: string; agent?: string; routing?: Routing; force?: boolean };
 
 export type ReportBody = {
   session: string;
