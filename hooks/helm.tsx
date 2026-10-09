@@ -493,7 +493,8 @@ export const register: Register = (on) => {
         return { text: url };
       }
       if (head === 'restart') {
-        await $.process.run(daemonArgv((await daemonInstall($, r.install)).root, 'restart'), { timeoutMs: 30_000 });
+        const res = await $.process.run(daemonArgv((await daemonInstall($, r.install)).root, 'restart'), { timeoutMs: 30_000 });
+        if (res.exitCode !== 0) throw new Error(`helmd restart failed: ${(res.stderr || res.stdout).trim()}`);
         return { text: 'helmd restarted' };
       }
       return { text: await helpText(r) };
