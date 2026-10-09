@@ -1,6 +1,6 @@
 import type { ClaimBody, DecisionBody, QueueBody, RegisterBody, ReportBody, SubscribeBody } from '../core/protocol.ts';
 import { workKey } from '../core/protocol.ts';
-import type { AgentRecord, Answer, Decision, HelmEvent, Leftover, Letter, Phase, Session, SessionRole, Subscription, Work } from '../core/types.ts';
+import type { AgentRecord, Answer, Decision, HelmEvent, Leftover, Letter, Phase, RepoName, Session, SessionRole, Subscription, Work } from '../core/types.ts';
 
 // bumped when the stored shape changes; an older file is migrated or refused, never read as this one
 export const LEDGER_VERSION = 1;
@@ -141,6 +141,25 @@ export class Ledger {
     this.data.subscriptions[id] = sub;
     this.changed();
     return sub;
+  }
+
+  // a subscription held back the settled ci of its pr's head
+  holdBack(id: string, sha: string): void {
+    const sub = this.data.subscriptions[id];
+    if (!sub || sub.held?.sha === sha) return;
+    sub.held = { sha };
+    this.changed();
+  }
+
+  // a poll's view of each held head: still the pr's head with ci settled is seen, anything else lets it go
+  reviewHeld(repo: RepoName, settledHead: (pr: number) => string | undefined): void {
+    for (const sub of Object.values(this.data.subscriptions)) {
+      if (sub.repo !== repo || !sub.held || sub.scope.kind !== 'pr') continue;
+      if (settledHead(sub.scope.number) !== sub.held.sha) delete sub.held;
+      else if (sub.held.seen) continue;
+      else sub.held.seen = true;
+      this.changed();
+    }
   }
 
   unsubscribe(id: string): boolean {
