@@ -322,6 +322,8 @@ export type Subscription = {
   tags?: string[];
   bots: boolean;
   until?: Until;
+  // a pr subscription's expected head: ci on a head strictly behind it is not its verdict
+  head?: string;
   session: string;
   agent?: string;
   createdAt: number;
