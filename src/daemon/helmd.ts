@@ -31,7 +31,8 @@ export type DaemonDeps = {
   loops?: boolean;
 };
 
-type Poll = PollStatus & { due: number; running: boolean };
+// again: asked for while it ran, so it runs once more as soon as it finishes
+type Poll = PollStatus & { due: number; running: boolean; again?: boolean };
 
 // how many repositories poll at once
 const POLL_CONCURRENCY = 3;
@@ -169,7 +170,10 @@ export class Daemon {
   async pollRepo(repo: RepoName, force = false): Promise<void> {
     const st = this.polls.get(repo) ?? { active: false, interval: 0, failures: 0, due: 0, running: false };
     this.polls.set(repo, st);
-    if (st.running) return;
+    if (st.running) {
+      st.again = true;
+      return;
+    }
     st.running = true;
     try {
       const p = await this.poller(repo);
@@ -191,6 +195,10 @@ export class Daemon {
       const base = st.active ? this.config.poll.active : this.config.poll.idle;
       st.interval = st.failures ? Math.min(this.config.poll.idle * 4, base * 2 ** st.failures) : base;
       st.due = this.now() + st.interval * 1000;
+    }
+    if (st.again) {
+      delete st.again;
+      await this.pollRepo(repo, force);
     }
   }
 
@@ -496,9 +504,12 @@ export class Daemon {
     return this.ledger.claim(b, title);
   }
 
+  // an agent reports right after it moved the forge (opened or readied a pr, pushed): reading its repository now
+  // keeps the derived phase from lagging what the agent did until the next poll
   report(b: ReportBody): ReturnType<Ledger['report']> {
     const out = this.ledger.report(b);
     for (const d of out.decisions) this.announce(d);
+    void this.pollRepo(b.repo);
     return out;
   }
 
@@ -636,6 +647,12 @@ export class Daemon {
   }
 }
 
+// what a stall stands for: the agent that left it and where its pr was, so a new head, agent or pr state is news
+function stallCondition(v: WorkView): string {
+  const pr = v.pull ? `pr #${v.pull.number} @${v.pull.sha} ${v.pull.draft ? 'draft' : `ci ${v.verdict}`}` : 'no pr';
+  return `agent ${v.agent ?? 'none'} · ${pr}`;
+}
+
 // timestamps dropped, then the error lines with what led up to them, a grep, or the tail
 export function trimLog(raw: string, opts: { tail?: number; grep?: string; errors?: boolean }): string {
   const lines = raw.split('\n').map((l) => l.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z /, ''));
@@ -647,12 +664,6 @@ export function trimLog(raw: string, opts: { tail?: number; grep?: string; error
     const keep = new Set<number>();
     lines.forEach((l, i) => {
       if (/##\[error\]|error(\[|:)|FAIL|panicked/i.test(l)) for (let k = Math.max(0, i - 20); k <= Math.min(lines.length - 1, i + 3); k++) keep.add(k);
-// what a stall stands for: the agent that left it and where its pr was, so a new head, agent or pr state is news
-function stallCondition(v: WorkView): string {
-  const pr = v.pull ? `pr #${v.pull.number} @${v.pull.sha} ${v.pull.draft ? 'draft' : `ci ${v.verdict}`}` : 'no pr';
-  return `agent ${v.agent ?? 'none'} · ${pr}`;
-}
-
     });
     if (keep.size) {
       const out: string[] = [];
