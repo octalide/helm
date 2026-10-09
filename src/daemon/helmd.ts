@@ -245,7 +245,7 @@ export class Daemon {
       }
       if (e.kind === 'ci' && e.pr !== undefined) {
         if (e.tags.includes('stalled')) {
-          const raised = this.ledger.raise(`stall:ci:${repo}#${e.pr}`, { kind: 'stall', repo, title: `CI stalled on pr #${e.pr}`, body: [e.text, ...(e.detail ?? []), e.url ?? ''].join('\n'), blocking: false, ...this.prIssue(repo, e.pr) });
+          const raised = this.ledger.raise(`stall:ci:${repo}#${e.pr}`, `head ${e.sha ?? ''}`, { kind: 'stall', repo, title: `CI stalled on pr #${e.pr}`, body: [e.text, ...(e.detail ?? []), e.url ?? ''].join('\n'), blocking: false, ...this.prIssue(repo, e.pr) });
           if (raised) this.announce(raised);
         }
         if (e.tags.includes('settled')) this.ledger.resolveKey(`stall:ci:${repo}#${e.pr}`);
@@ -254,7 +254,7 @@ export class Daemon {
         const run = forge?.runs.find((r) => r.id === e.run);
         const key = `failure:${repo}:${run?.workflow ?? ''}:${e.branch}`;
         if (e.tags.includes('failure')) {
-          const raised = this.ledger.raise(key, { kind: 'failure', repo, title: `${run?.workflow ?? 'CI'} failing on ${e.branch}`, body: [e.text, e.url ?? ''].join('\n'), blocking: false });
+          const raised = this.ledger.raise(key, `run ${e.run}`, { kind: 'failure', repo, title: `${run?.workflow ?? 'CI'} failing on ${e.branch}`, body: [e.text, e.url ?? ''].join('\n'), blocking: false });
           if (raised) this.announce(raised);
         }
         if (e.tags.includes('success')) this.ledger.resolveKey(key);
@@ -335,7 +335,7 @@ export class Daemon {
       const was = before.get(key);
       const stallKey = `stall:work:${key}`;
       if (v.phase === 'stalled') {
-        const raised = this.ledger.raise(stallKey, {
+        const raised = this.ledger.raise(stallKey, stallCondition(v), {
           kind: 'stall',
           repo: v.repo,
           issue: v.issue,
@@ -647,6 +647,12 @@ export function trimLog(raw: string, opts: { tail?: number; grep?: string; error
     const keep = new Set<number>();
     lines.forEach((l, i) => {
       if (/##\[error\]|error(\[|:)|FAIL|panicked/i.test(l)) for (let k = Math.max(0, i - 20); k <= Math.min(lines.length - 1, i + 3); k++) keep.add(k);
+// what a stall stands for: the agent that left it and where its pr was, so a new head, agent or pr state is news
+function stallCondition(v: WorkView): string {
+  const pr = v.pull ? `pr #${v.pull.number} @${v.pull.sha} ${v.pull.draft ? 'draft' : `ci ${v.verdict}`}` : 'no pr';
+  return `agent ${v.agent ?? 'none'} · ${pr}`;
+}
+
     });
     if (keep.size) {
       const out: string[] = [];

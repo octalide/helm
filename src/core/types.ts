@@ -290,6 +290,8 @@ export type Decision = {
 };
 
 export type Scope =
+  // what held when it was raised; a dismissal holds against it until the condition changes or ends
+  condition?: string;
   | { kind: 'repo' }
   | { kind: 'issue'; number: number }
   | { kind: 'pr'; number: number }

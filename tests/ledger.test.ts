@@ -67,6 +67,21 @@ describe('ledger', () => {
     expect(l.data.decisions[decisions[0]!.id]?.state).toBe('resolved');
   });
 
+  it('holds a dismissed condition until it changes or ends, then raises it again', () => {
+    const { l } = ledger();
+    const b = { kind: 'stall' as const, repo: 'o/r', issue: 1, title: 'stalled', body: '', blocking: false };
+    const first = l.raise('stall:work:o/r#1', 'agent x · pr @a', b)!;
+    expect(l.raise('stall:work:o/r#1', 'agent x · pr @b', b)).toBeUndefined();
+    expect(first.condition).toBe('agent x · pr @b');
+    l.dismiss(first.id);
+    expect(l.raise('stall:work:o/r#1', 'agent x · pr @b', b)).toBeUndefined();
+    const moved = l.raise('stall:work:o/r#1', 'agent y · pr @b', b)!;
+    expect(moved.id).not.toBe(first.id);
+    l.dismiss(moved.id);
+    l.resolveKey('stall:work:o/r#1');
+    expect(l.raise('stall:work:o/r#1', 'agent y · pr @b', b)?.state).toBe('open');
+  });
+
   it('marks a quiet session gone', () => {
     const { l, tick } = ledger();
     l.register({ id: 'A', cwd: '/' });
