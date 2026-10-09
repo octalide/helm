@@ -1,4 +1,5 @@
 import { isDone, isPassing } from '../core/checks.ts';
+import { forPerson, forSession } from '../core/decision.ts';
 import { percent } from '../core/tree.ts';
 import type { Decision, Fleet, Job, Phase, Rollup, Run, SessionRole, TreeNode, WorkView } from '../core/types.ts';
 import { selfWorked } from '../core/work.ts';
@@ -45,6 +46,7 @@ const short = (model: string) => model.replace(/^claude-/, '').replace(/-(\d+)-(
 const repoShort = (r: string) => r.split('/')[1] ?? r;
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
 
+// decisions are the open ones in scope
 export function counts(work: readonly WorkView[], decisions: readonly Decision[]) {
   const open = work.filter((w) => w.phase !== 'done');
   return {
@@ -53,8 +55,8 @@ export function counts(work: readonly WorkView[], decisions: readonly Decision[]
     parked: open.filter((w) => w.phase === 'parked').length,
     ci: open.filter((w) => w.phase === 'ci').length,
     attention: open.filter((w) => w.phase === 'blocked' || w.phase === 'failing' || w.phase === 'stalled').length,
-    waiting: decisions.filter((d) => d.state === 'open' && d.blocking).length,
-    review: decisions.filter((d) => d.state === 'open' && !d.blocking).length,
+    waiting: decisions.filter((d) => d.blocking).length,
+    open: decisions.filter((d) => !d.blocking).length,
   };
 }
 
@@ -65,15 +67,16 @@ function summary(c: ReturnType<typeof counts>): Row {
   if (c.ci) row.push({ text: ` · ${c.ci} in ci`, color: 'warning' });
   if (c.attention) row.push({ text: ` · ${c.attention} need attention`, color: 'error' });
   if (c.waiting) row.push({ text: ` · ${c.waiting} waiting on a decision`, color: 'error', bold: true });
-  if (c.review) row.push({ text: ` · ${c.review} for review`, dim: true });
+  if (c.open) row.push({ text: ` · ${c.open} to decide`, dim: true });
   return row;
 }
 
-// what this session sees: its own work and the decisions about it, or for a coordinator everything
+// what this session sees: its own work and the decisions addressed to it, or for a coordinator all work and the
+// person's decisions besides its own
 function scope(f: Fleet, self: Self) {
   const fleet = self.role === 'coordinator';
   const work = f.work.filter((w) => w.phase !== 'done' && (fleet || w.owner === self.session));
-  const decisions = f.decisions.filter((d) => d.state === 'open' && (fleet || d.from?.session === self.session || work.some((w) => w.repo === d.repo && w.issue === d.issue)));
+  const decisions = f.decisions.filter((d) => forSession(d, self.session) || (fleet && forPerson(d)));
   const repos = fleet ? Object.keys(f.repos) : [...new Set([...(self.repo ? [self.repo] : []), ...work.map((w) => w.repo)])];
   return { fleet, work, decisions, repos };
 }
@@ -275,7 +278,7 @@ function ciTab(f: Fleet, self: Self, o: PaneOpts): Row[] {
 
 function inboxTab(f: Fleet, self: Self, o: PaneOpts): Row[] {
   const s = scope(f, self);
-  if (!s.decisions.length) return [[{ text: 'nothing waits on you.', dim: true }]];
+  if (!s.decisions.length) return [[{ text: s.fleet ? 'nothing waits on you or this session.' : 'nothing is addressed to this session.', dim: true }]];
   const rows: Row[] = [];
   const sorted = [...s.decisions].sort((a, b) => Number(b.blocking) - Number(a.blocking) || b.createdAt - a.createdAt);
   for (const d of sorted) {
@@ -285,7 +288,8 @@ function inboxTab(f: Fleet, self: Self, o: PaneOpts): Row[] {
     if (first) rows.push([{ text: '         ' }, { text: first, dim: true }]);
     const controls: Row = [{ text: '         ' }];
     for (const [i, option] of (d.options ?? []).entries()) controls.push({ text: option, press: `answer:${d.id}:${i}`, boxed: true }, { text: ' ' });
-    controls.push({ text: d.blocking ? 'dismiss' : 'reviewed', press: `dismiss:${d.id}`, dim: true });
+    if (d.to === 'session') controls.push({ text: 'escalate', press: `escalate:${d.id}`, dim: true }, { text: ' ' });
+    controls.push({ text: 'dismiss', press: `dismiss:${d.id}`, dim: true });
     rows.push(controls);
   }
   if (o.web) rows.push([], [{ text: `a written answer: ${o.web}`, dim: true }]);
@@ -312,7 +316,7 @@ export function bandRow(f: Fleet, self: Self): Row | undefined {
 
 export function statusText(f: Fleet, self: Self): string | undefined {
   const s = scope(f, self);
-  if (!s.work.length && !f.decisions.some((d) => d.state === 'open' && d.blocking)) return undefined;
+  if (!s.work.length && !s.decisions.some((d) => d.blocking)) return undefined;
   const c = counts(s.work, s.decisions);
   return [`helm ${c.active}▸`, c.ci ? `${c.ci}ci` : '', c.attention ? `${c.attention}!` : '', c.waiting ? `${c.waiting}?` : ''].filter(Boolean).join(' ');
 }

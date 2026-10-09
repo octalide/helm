@@ -1,4 +1,5 @@
 import { isDone, isPassing, verdictOf } from '../core/checks.ts';
+import { forPerson, isOpen, isRecord, unreviewed } from '../core/decision.ts';
 import { rollupText } from '../core/tree.ts';
 import { selfWorked } from '../core/work.ts';
 import type { Branch, Check, Decision, Fleet, ForgeState, Issue, Job, LocalState, Pull, Run, Session, Subscription, TreeNode, Worktree, WorkView } from '../core/types.ts';
@@ -103,11 +104,15 @@ export function branchLine(b: Branch, now: number): string {
   return `${b.name} @${b.sha.slice(0, 7)} ${sync} · ${ago(b.committedAt, now)} ago`;
 }
 
-export function decisionLine(d: Decision, now: number): string {
+// a record is for review and addressed to nobody; a decision names who it is for
+export function decisionLine(d: Decision, now: number, self?: string): string {
   const where = d.repo ? ` ${d.repo}${d.issue !== undefined ? `#${d.issue}` : ''}` : '';
-  const state = d.state === 'open' ? (d.blocking ? 'waiting' : 'review') : d.state;
+  const record = isRecord(d);
+  const state = d.state === 'open' ? (record ? 'for review' : d.blocking ? 'waiting' : 'open') : d.state;
+  const to = record ? '' : `, for ${d.to === 'person' ? 'the person' : d.session === self ? 'this session' : `session ${d.session}`}`;
+  const escalated = d.escalated ? `\n  escalated by ${d.escalated.by}${d.escalated.note ? `: ${d.escalated.note}` : ''}` : '';
   const answer = d.answer ? `\n  answer by ${d.answer.by}: ${d.answer.option ? `${d.answer.option} ` : ''}${d.answer.text}` : '';
-  return `${d.id} [${d.kind}, ${state}]${where}: ${d.title} · ${ago(d.createdAt, now)} ago${d.options?.length ? `\n  options: ${d.options.join(' | ')}` : ''}${d.body ? `\n  ${d.body.split('\n').join('\n  ')}` : ''}${answer}`;
+  return `${d.id} [${d.kind}, ${state}${to}]${where}: ${d.title} · ${ago(d.createdAt, now)} ago${d.options?.length ? `\n  options: ${d.options.join(' | ')}` : ''}${d.body ? `\n  ${d.body.split('\n').join('\n  ')}` : ''}${escalated}${answer}`;
 }
 
 export function sessionLine(s: Session, now: number, self?: string): string {
@@ -140,10 +145,12 @@ export function localBlock(what: 'worktrees' | 'branches', l: LocalState | undef
 
 export function fleetBlock(f: Fleet, self: string | undefined, home?: string): string {
   const live = f.sessions.filter((s) => !s.gone);
-  const open = f.decisions.filter((d) => d.state === 'open');
+  const person = f.decisions.filter(forPerson);
+  const sessions = f.decisions.filter((d) => isOpen(d) && d.to === 'session').length;
+  const records = f.decisions.filter(unreviewed).length;
   const bySession = new Map<string, WorkView[]>();
   for (const w of f.work.filter((x) => x.phase !== 'done')) bySession.set(w.owner ?? 'unowned', [...(bySession.get(w.owner ?? 'unowned') ?? []), w]);
-  const lines = [`sessions ${live.length} live · work ${f.work.filter((w) => w.phase !== 'done').length} open · decisions ${open.filter((d) => d.blocking).length} waiting, ${open.filter((d) => !d.blocking).length} for review`];
+  const lines = [`sessions ${live.length} live · work ${f.work.filter((w) => w.phase !== 'done').length} open · decisions ${person.length} for the person (${person.filter((d) => d.blocking).length} waiting), ${sessions} with sessions · ${records} records for review`];
   for (const s of live) {
     lines.push('', sessionLine(s, f.at, self));
     const mine = bySession.get(s.id) ?? [];

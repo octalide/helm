@@ -393,6 +393,8 @@ a.rd:hover { text-decoration: none; transform: translateY(-1px); }
 .cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: grid; gap: 7px; min-width: 0; box-shadow: var(--shadow); }
 .card.blocking { box-shadow: inset 4px 0 0 var(--bad), var(--shadow); }
+.card.muted { background: none; box-shadow: none; border-style: dashed; }
+.card.muted .title { color: var(--ink-2); font-weight: 600; }
 .card .head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12.5px; }
 .card .title { font-weight: 650; font-size: 14px; }
 .card .body { white-space: pre-wrap; color: var(--ink-2); font-size: 13px; max-height: 16em; overflow: auto; }

@@ -1,12 +1,12 @@
 import { installTooltip } from './charts.js';
-import { $, api, ATTENTION, el, filter, FILTERS, go, href, local, parseRoute, PHASE, repoShort, sessionName, setQuery, store, tickTimes } from './core.js';
+import { $, api, ATTENTION, el, filter, FILTERS, forYou, go, href, local, parseRoute, PHASE, repoShort, sessionName, setQuery, store, tickTimes } from './core.js';
 import { renderDrawer } from './drawer.js';
 import { installPalette, openPalette } from './palette.js';
 import { agents, routing } from './view-agents.js';
 import { board } from './view-board.js';
 import { ci } from './view-ci.js';
 import { epics } from './view-epics.js';
-import { activity, inbox, repos } from './view-more.js';
+import { activity, inbox, repos, review } from './view-more.js';
 import { overview } from './view-overview.js';
 import { timeline } from './view-timeline.js';
 
@@ -21,7 +21,8 @@ const VIEWS = [
   { id: 'ci', label: 'CI', key: '5', icon: 'ci', draw: ci, badge: (f) => Object.values(f.repos).reduce((a, v) => a + (v.forge ? v.forge.runs.filter((r) => r.state === 'queued' || r.state === 'running').length : 0), 0), live: true },
   { id: 'agents', label: 'Agents', key: '6', icon: 'bot', draw: agents, badge: (f) => f.sessions.filter((s) => !s.gone).flatMap((s) => s.agents).filter((a) => ['running', 'pending', 'waiting'].includes(a.status)).length, live: true },
   { id: 'routing', label: 'Routing', key: '7', icon: 'route', draw: routing },
-  { id: 'inbox', label: 'Inbox', key: '8', icon: 'inbox', draw: (m) => inbox(m, load), badge: (f) => f.decisions.filter((d) => d.state === 'open').length, alarm: (f) => f.decisions.some((d) => d.state === 'open' && d.blocking) },
+  { id: 'inbox', label: 'Inbox', key: '8', icon: 'inbox', draw: (m) => inbox(m, load), badge: (f) => f.decisions.filter(forYou).length, alarm: (f) => f.decisions.some((d) => forYou(d) && d.blocking) },
+  { id: 'review', label: 'Review', key: 'r', icon: 'review', draw: (m) => review(m, load) },
   { id: 'repos', label: 'Repos', key: '9', icon: 'repo', draw: repos },
   { id: 'activity', label: 'Activity', key: '0', icon: 'feed', draw: activity },
 ];
@@ -35,6 +36,7 @@ const ICONS = {
   bot: 'M6 8h12v10H6zM12 4v4M9 13h.01M15 13h.01',
   route: 'M6 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM18 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM6 15V9a4 4 0 0 1 4-4h6',
   inbox: 'M3 13h5l2 3h4l2-3h5M5 5h14l2 8v6H3v-6z',
+  review: 'M5 4h14v16H5zM8 9h8M8 13h8M8 17h5',
   repo: 'M6 3h12v18l-6-4-6 4z',
   feed: 'M4 6h16M4 12h16M4 18h10',
 };
@@ -148,7 +150,7 @@ function renderSummary() {
   const f = store.fleet;
   const o = open(f);
   const att = o.filter((w) => ATTENTION.has(w.phase)).length;
-  const waiting = f.decisions.filter((d) => d.state === 'open' && d.blocking).length;
+  const waiting = f.decisions.filter((d) => forYou(d) && d.blocking).length;
   const g = f.rates.graphql;
   const core = f.rates.core;
   $('summary').replaceChildren(
@@ -170,7 +172,7 @@ function render() {
   const v = VIEWS.find((x) => x.id === store.route.view) || VIEWS[0];
   $('view-title').textContent = v.label;
   const main = $('main');
-  if (v.id !== 'inbox') delete main.dataset.view;
+  if (v.id !== 'inbox' && v.id !== 'review') delete main.dataset.view;
   const y = window.scrollY;
   const scrollers = [...main.querySelectorAll('.board-wrap, .tl-chart')].map((n) => n.scrollLeft);
   v.draw(main);

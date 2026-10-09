@@ -1,7 +1,8 @@
+import { forPerson, forSession, isOpen, isRecord } from '../core/decision.ts';
 import { workKey } from '../core/protocol.ts';
 import { describeScope, parseScope } from '../core/scope.ts';
 import { findNode } from '../core/tree.ts';
-import type { CiFilter, ReportState, RepoName, Until } from '../core/types.ts';
+import type { CiFilter, Decision, ReportState, RepoName, Until } from '../core/types.ts';
 import type { HelmClient } from './client.ts';
 import { HelmError } from './client.ts';
 import { decisionLine, fleetBlock, forgeBlock, jobLines, localBlock, pullLine, sessionLine, subscriptionLine, treeBlock, workBlock } from './format.ts';
@@ -41,6 +42,12 @@ function needInt(v: unknown, what: string): number {
   return n;
 }
 
+// the open decisions, those for this session first
+function inbox(decisions: readonly Decision[], self: string, now: number): string {
+  const open = decisions.filter(isOpen);
+  return [...open.filter((d) => forSession(d, self)), ...open.filter((d) => !forSession(d, self))].map((d) => decisionLine(d, now, self)).join('\n');
+}
+
 const STATES: readonly ReportState[] = ['working', 'waiting', 'blocked', 'ready', 'stopped', 'abandoned'];
 
 export const TOOLS: Tool[] = [
@@ -48,14 +55,15 @@ export const TOOLS: Tool[] = [
     name: 'status',
     eager: true,
     description:
-      'helm status for this session: its role and repository, its work with phases (queued, working, draft, ci, failing, ready, blocked, stalled, parked, done), open decisions, its subscriptions, letters waiting for its agents, and the web page. Call it at session start.',
+      'helm status for this session: its role and repository, its work with phases (queued, working, draft, ci, failing, ready, blocked, stalled, parked, done), the decisions addressed to it and its own waiting on the person, its subscriptions, letters waiting for its agents, and the web page. Call it at session start.',
     inputSchema: { type: 'object', properties: {} },
     async run(env) {
       const f = await env.client.fleet();
       const me = f.sessions.find((s) => s.id === env.session());
       const mine = f.work.filter((w) => w.owner === env.session());
       const subs = f.subscriptions.filter((s) => s.session === env.session());
-      const open = f.decisions.filter((d) => d.state === 'open' && (d.from?.session === env.session() || mine.some((w) => w.repo === d.repo && w.issue === d.issue)));
+      const forMe = f.decisions.filter((d) => forSession(d, env.session()));
+      const asked = f.decisions.filter((d) => forPerson(d) && (d.from?.session === env.session() || mine.some((w) => w.repo === d.repo && w.issue === d.issue)));
       const health = await env.client.health();
       return [
         `helm ${env.version} · helmd ${health.version} · ${health.web ?? ''}`,
@@ -64,8 +72,9 @@ export const TOOLS: Tool[] = [
         'work:',
         workBlock(mine.filter((w) => w.phase !== 'done'), env.home),
         '',
-        `decisions (${open.length} open):`,
-        ...open.map((d) => decisionLine(d, f.at)),
+        `decisions for this session (${forMe.length}):`,
+        ...forMe.map((d) => decisionLine(d, f.at, env.session())),
+        ...(asked.length ? ['', `waiting on the person (${asked.length}):`, ...asked.map((d) => decisionLine(d, f.at, env.session()))] : []),
         '',
         'subscriptions:',
         ...subs.map((s) => subscriptionLine(s, describeScope)),
@@ -104,8 +113,7 @@ export const TOOLS: Tool[] = [
         if (what === 'fleet') return fleetBlock(f, env.session(), env.home);
         if (what === 'work') return workBlock(f.work.filter((w) => w.owner === env.session() && w.phase !== 'done'), env.home);
         if (what === 'sessions') return f.sessions.map((s) => sessionLine(s, now, env.session())).join('\n') || 'no sessions';
-        const open = f.decisions.filter((d) => d.state === 'open');
-        return open.map((d) => decisionLine(d, now)).join('\n') || 'no open decisions';
+        return inbox(f.decisions, env.session(), now) || 'no open decisions';
       }
       const repo = env.repo(input.repo);
       if (what === 'issue') {
@@ -214,7 +222,7 @@ export const TOOLS: Tool[] = [
     name: 'report',
     eager: true,
     description:
-      'Tell helm where your work on an issue stands, so the person and the session that owns it can track it. Call it with working when you start an issue (this claims it for you), waiting when you end your turn to wait for CI, ready when the PR is ready and green, blocked with a question when you cannot continue without a decision (the question goes to the decision inbox; the answer resumes you), stopped when you stop for any other reason, abandoned when told to. choices lists decisions you made that the issue did not settle, logged for the person to review. plan is your plan as it stands, every step with whether it is done: send it whole each time it changes, so the person sees your progress.',
+      'Tell helm where your work on an issue stands, so the person and the session that owns it can track it. Call it with working when you start an issue (this claims it for you), waiting when you end your turn to wait for CI, ready when the PR is ready and green, blocked with a question when you cannot continue without a decision (a question from an agent goes to the session that owns the work, which answers it or escalates it to the person, and one from a session itself goes to the person; the answer resumes you), stopped when you stop for any other reason, abandoned when told to. choices lists decisions you made that the issue did not settle: records for the person to review, which need no answer. plan is your plan as it stands, every step with whether it is done: send it whole each time it changes, so the person sees your progress.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -261,7 +269,7 @@ export const TOOLS: Tool[] = [
       const asked = out.decisions.filter((d) => d.blocking);
       return [
         `${workKey(repo, issue)} reported ${state}`,
-        ...out.decisions.map((d) => `logged ${d.id} (${d.kind}${d.blocking ? ', waiting' : ', for review'}): ${d.title}`),
+        ...out.decisions.map((d) => (isRecord(d) ? `recorded ${d.id} for review (${d.kind}): ${d.title}` : `asked ${d.id} of ${d.to === 'person' ? 'the person' : `session ${d.session}`}: ${d.title}`)),
         ...(asked.length ? ['End your turn now. The answer arrives as a message that resumes you.'] : []),
       ].join('\n');
     },
@@ -300,10 +308,10 @@ export const TOOLS: Tool[] = [
   {
     name: 'decide',
     eager: false,
-    description: "The decision inbox: list open decisions (every session's), answer one (text and, where it has options, an option; a routing decision takes a tier name to reroute), or dismiss one. The answer goes to the agent or session waiting on it.",
+    description: 'The decision inbox. list shows the open decisions, each with who it is for: those for this session first (its agents\' questions and its stalls), then the person\'s and other sessions\'. answer one (text and, where it has options, an option; a routing record takes a tier name to reroute), escalate one addressed to this session to the person when its answer is not within this session\'s authority (text is an optional note), or dismiss one. The answer goes to the agent or session waiting on it. Choices and routing picks are records for the person to review, not decisions.',
     inputSchema: {
       type: 'object',
-      properties: { action: { type: 'string', enum: ['list', 'answer', 'dismiss'] }, id: { type: 'string' }, text: { type: 'string' }, option: { type: 'string' } },
+      properties: { action: { type: 'string', enum: ['list', 'answer', 'escalate', 'dismiss'] }, id: { type: 'string' }, text: { type: 'string' }, option: { type: 'string' } },
       required: ['action'],
     },
     async run(env, input) {
@@ -311,11 +319,12 @@ export const TOOLS: Tool[] = [
       const id = str(input.id);
       if (action === 'list') {
         const f = await env.client.fleet();
-        return f.decisions.filter((d) => d.state === 'open').map((d) => decisionLine(d, f.at)).join('\n') || 'no open decisions';
+        return inbox(f.decisions, env.session(), f.at) || 'no open decisions';
       }
       if (!id) throw new HelmError(400, 'id is required');
       if (action === 'dismiss') return `dismissed ${(await env.client.dismiss(id)).id}`;
-      if (action !== 'answer') throw new HelmError(400, 'action is list, answer or dismiss');
+      if (action === 'escalate') return `escalated ${(await env.client.escalate(id, { by: `session ${env.session()}`, ...(str(input.text) ? { note: str(input.text)! } : {}) })).id} to the person`;
+      if (action !== 'answer') throw new HelmError(400, 'action is list, answer, escalate or dismiss');
       const out = await env.client.answer(id, { text: str(input.text) ?? '', ...(str(input.option) ? { option: str(input.option)! } : {}), by: `session ${env.session()}` });
       return `answered ${out.decision.id}${out.delivered ? ', delivered' : ', but nobody live was waiting on it'}`;
     },
