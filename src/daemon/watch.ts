@@ -1,3 +1,4 @@
+import { ATTENTION } from '../core/tree.ts';
 import type { ForgeState, HelmEvent, Subscription } from '../core/types.ts';
 
 // the item tags a subscription takes when it names none: what someone acts on, not housekeeping
@@ -9,10 +10,9 @@ export const DEFAULT_ITEM_TAGS: Record<string, readonly string[]> = {
   run: [],
   tag: [],
   work: ['phase', 'answered', 'leftovers', 'adopted'],
-  fleet: ['phase', 'decision', 'answered', 'progress', 'leftovers', 'adopted', 'returned'],
+  // the coordinator hears what needs it: work entering an attention phase, decisions, handovers and epics completing
+  fleet: [...ATTENTION, 'decision', 'answered', 'leftovers', 'adopted', 'returned', 'complete'],
 };
-
-const ATTENTION: ReadonlySet<string> = new Set(['blocked', 'failing', 'stalled']);
 
 export type MatchContext = {
   // branches a repo-scope subscription hears failed runs on: the default branch and the long-lived ones
@@ -30,8 +30,7 @@ export function globMatch(glob: string, text: string): boolean {
 
 function inScope(e: HelmEvent, s: Subscription): boolean {
   const scope = s.scope;
-  // the fleet hears an epic's work through its progress, except what needs someone
-  if (scope.kind === 'fleet') return e.kind === 'decision' || e.kind === 'epic' || (e.kind === 'work' && (!e.epic || e.tags.some((t) => ATTENTION.has(t))));
+  if (scope.kind === 'fleet') return e.kind === 'decision' || e.kind === 'epic' || e.kind === 'work';
   if (scope.kind === 'work') return (e.kind === 'work' || e.kind === 'decision') && e.owner === s.session;
   if (e.kind === 'work' || e.kind === 'decision' || e.kind === 'epic') return false;
   if (s.repo !== e.repo) return false;

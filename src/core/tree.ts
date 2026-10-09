@@ -1,7 +1,8 @@
 import type { Child, ForgeState, Issue, Phase, RepoName, Rollup, TreeNode, WorkView } from './types.ts';
 
 const ACTIVE: ReadonlySet<Phase> = new Set(['working', 'draft', 'ci', 'ready']);
-const ATTENTION: ReadonlySet<Phase> = new Set(['blocked', 'failing', 'stalled']);
+// the phases where work needs someone
+export const ATTENTION: ReadonlySet<Phase> = new Set(['blocked', 'failing', 'stalled']);
 
 const keyOf = (repo: RepoName, number: number) => `${repo}#${number}`;
 
