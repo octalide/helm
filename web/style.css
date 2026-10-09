@@ -83,6 +83,11 @@ button.primary { background: var(--ink); border-color: var(--ink); color: var(--
 button.quiet { background: none; border-color: transparent; color: var(--ink-2); }
 button.quiet:hover { border-color: var(--line); }
 button.mini { padding: 0 6px; font-size: 11px; }
+/* a select draws its own chevron in the page's colors, and its open list takes the theme through color-scheme */
+select { appearance: none; color-scheme: inherit; font: inherit; color: var(--ink); cursor: pointer; background-color: transparent; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: right 12px top 55%, right 8px top 55%; background-size: 4px 4px; background-repeat: no-repeat; }
+select:hover { background-color: var(--hover); }
+option, optgroup { color: var(--ink); background: var(--raised); }
+option:checked { background: var(--focus); color: #fff; }
 .grow { flex: 1; min-width: 0; }
 .dim { color: var(--muted); }
 .small { font-size: 12px; }
@@ -145,7 +150,8 @@ svg .t-parked { fill: var(--parked); }
 #f-q { width: 220px; font: inherit; font-size: 13px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 7px; padding: 4px 10px; }
 .fsel { display: inline-flex; align-items: center; gap: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); font-size: 12.5px; overflow: hidden; }
 .fsel span { padding: 3px 4px 3px 9px; color: var(--muted); }
-.fsel select { font: inherit; color: var(--ink); background: transparent; border: 0; padding: 3px 6px 3px 2px; max-width: 220px; }
+.fsel select { font: inherit; color: var(--ink); border: 0; border-radius: 0 6px 6px 0; padding: 3px 24px 3px 2px; max-width: 220px; }
+.fsel select:focus-visible { outline-offset: -2px; }
 .fsel.set { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus) inset; }
 .fsel.set span { color: var(--ink-2); }
 
@@ -267,14 +273,16 @@ a.tile:hover { text-decoration: none; border-color: var(--axis); }
 .agents-mini { display: flex; flex-wrap: wrap; gap: 4px 10px; }
 
 /* work cards */
-.wcard { display: grid; gap: 6px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); box-shadow: var(--shadow); font-size: 13px; position: relative; }
+.wcard { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 6px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); box-shadow: var(--shadow); font-size: 13px; position: relative; }
 .wcard:hover, .wcard:focus { text-decoration: none; border-color: var(--axis); }
 .wcard.p-blocked, .wcard.p-failing { box-shadow: inset 3px 0 0 var(--bad), var(--shadow); }
 .wcard.p-stalled { box-shadow: inset 3px 0 0 var(--warn), var(--shadow); }
 .wcard.p-ready { box-shadow: inset 3px 0 0 var(--ready), var(--shadow); }
 .wcard.p-parked { box-shadow: inset 3px 0 0 var(--parked), var(--shadow); }
 .wcard.p-done { opacity: 0.7; }
-.wc-head { display: flex; gap: 6px; align-items: center; }
+.wc-head { display: flex; flex-wrap: wrap; gap: 2px 6px; align-items: center; }
+.wc-head .ref { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.wc-head > :last-child { margin-left: auto; }
 .wc-head time { font-size: 11.5px; }
 .wc-title { font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
 .wc-meta { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
@@ -297,7 +305,7 @@ a.tile:hover { text-decoration: none; border-color: var(--axis); }
 .t-line-bad { --lc: var(--bad); }
 .t-line-queued { --lc: var(--queued); }
 .t-line-parked { --lc: var(--parked); }
-.bcol { display: grid; gap: 8px; align-content: start; min-height: 40px; padding: 4px; border-radius: 10px; background: color-mix(in srgb, var(--ink) 2%, transparent); }
+.bcol { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; align-content: start; min-height: 40px; padding: 4px; border-radius: 10px; background: color-mix(in srgb, var(--ink) 2%, transparent); }
 .lane-head { padding: 10px 2px 0; font-size: 13px; border-top: 1px dashed var(--line); margin-top: 4px; }
 
 /* epics */

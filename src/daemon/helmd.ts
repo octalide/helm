@@ -7,7 +7,8 @@ import { isRecord } from '../core/decision.ts';
 import type { AnswerBody, Answered, ClaimBody, ConfigView, DecisionBody, EscalateBody, IssueDetail, QueueBody, RegisterBody, ReportBody, StreamFrame, SubscribeBody } from '../core/protocol.ts';
 import { PROTOCOL, workKey } from '../core/protocol.ts';
 import type { HelmPaths } from '../core/paths.ts';
-import type { AgentRecord, Decision, Fleet, ForgeState, HelmEvent, Letter, LocalState, Phase, PollStatus, Pull, RepoName, RepoView, Session, SessionRole, Subscription, TreeNode, WorkView } from '../core/types.ts';
+import type { AgentRecord, Decision, Fleet, ForgeState, HelmEvent, Letter, LetterPart, LocalState, Phase, PollStatus, Pull, RepoName, RepoView, Session, SessionRole, Subscription, TreeNode, Work, WorkView } from '../core/types.ts';
+import { letterText } from '../core/letter.ts';
 import { route } from './deliver.ts';
 import { buildTree } from '../core/tree.ts';
 import { hasWorker, selfWorked } from '../core/work.ts';
@@ -253,6 +254,11 @@ export class Daemon {
       delete st.error;
       st.lastPoll = this.now();
       if (changed) st.lastChange = st.lastPoll;
+      this.ledger.reviewHeld(repo, (n) => {
+        const pull = p.forge?.pulls.find((x) => x.number === n && x.state === 'open');
+        const verdict = pull ? verdictOf(pull.checks) : 'none';
+        return pull && (verdict === 'success' || verdict === 'failure') ? pull.sha : undefined;
+      });
       if (events.length) this.handle(repo, events, await this.heldHeads(repo, events));
       if (changed) this.changed();
     } catch (error) {
@@ -374,9 +380,15 @@ export class Daemon {
     for (const e of events) byRepo.set(e.repo ?? '', [...(byRepo.get(e.repo ?? '') ?? []), e]);
     for (const [repo, batch] of byRepo) {
       const { letters, retired } = route(batch, subs, this.context(repo || undefined, opts.held), this.now());
-      for (const l of letters) this.send(this.ledger.post(l));
+      for (const l of letters) this.post(l);
       for (const id of retired) this.ledger.unsubscribe(id);
     }
+  }
+
+  // a letter for an agent that reported stopped goes to its session's main loop, since sending it would resume the agent
+  private post(l: Omit<Letter, 'id' | 'at'>): void {
+    const w = l.agent !== undefined ? this.ledger.stopped(l.session, l.agent) : undefined;
+    this.send(this.ledger.post(w ? heldFor(l, w) : l));
   }
 
   private send(letter: Letter): void {
@@ -473,8 +485,9 @@ export class Daemon {
   workViews(): WorkView[] {
     const sessions = new Map(Object.entries(this.ledger.data.sessions));
     const decisions = Object.values(this.ledger.data.decisions);
+    const subscriptions = Object.values(this.ledger.data.subscriptions);
     return Object.values(this.ledger.data.work)
-      .map((w) => viewOf(w, this.pollers.get(w.repo)?.forge, this.local.get(w.repo), sessions, decisions, this.now()))
+      .map((w) => viewOf(w, this.pollers.get(w.repo)?.forge, this.local.get(w.repo), sessions, decisions, this.now(), subscriptions))
       .sort((a, b) => (a.owner ?? '').localeCompare(b.owner ?? '') || a.order - b.order);
   }
 
@@ -550,6 +563,8 @@ export class Daemon {
     for (const a of agents) {
       const was = before.get(a.id);
       if (!LOOPING.has(a.status) && (was === undefined || LOOPING.has(was))) void this.agentEnded(id, a.id);
+      // one that ended and runs again was messaged by its session, which lifts a stop it reported
+      if (LOOPING.has(a.status) && was !== undefined && !LOOPING.has(was)) this.ledger.resume(id, a.id);
     }
     for (const [agent, was] of before) if (LOOPING.has(was) && !agents.some((a) => a.id === agent)) void this.agentEnded(id, agent);
     return s;
@@ -615,7 +630,7 @@ export class Daemon {
     if (verdict !== 'success' && verdict !== 'failure') return;
     // right after a push the forge can still show the old head: its verdict is not the one the subscriber waits on,
     // and the live verdict comes once ci settles on the new head
-    if (await this.holds(repo, sub, pull.sha)) return;
+    if (await this.holds(repo, sub, pull.sha, pull.number)) return this.ledger.holdBack(sub.id, pull.sha);
     this.dispatch([verdictEvent(repo, pull, verdict, this.now())], { only: [sub] });
   }
 
@@ -632,29 +647,42 @@ export class Daemon {
   }
 
   // whether ci on sha is not the verdict a subscription waits on. a named head takes only itself and what descends
-  // from it, so a pre-rebase head is held back too. a guessed head holds back only what it strictly descends from:
-  // a missing object or any other answer delivers, since the guess can itself be the stale side
-  private async holds(repo: RepoName, sub: Subscription, sha: string): Promise<boolean> {
+  // from it, so a pre-rebase head is held back too. a guessed head holds back only what it strictly descends from,
+  // since the guess can itself be the stale side. either way a pair helm cannot judge delivers
+  private async holds(repo: RepoName, sub: Subscription, sha: string, pr: number): Promise<boolean> {
     if (!sub.head || sameSha(sha, sub.head)) return false;
-    return sub.named ? !(await this.descends(repo, sha, sub.head)) : this.descends(repo, sub.head, sha);
+    return sub.named ? (await this.descends(repo, pr, sha, sub.head)) === false : (await this.descends(repo, pr, sub.head, sha)) === true;
   }
 
-  // whether a checkout of the repository knows head to descend from base
-  private async descends(repo: RepoName, head: string, base: string): Promise<boolean> {
-    for (const checkout of this.checkouts.get(repo) ?? []) {
-      if (await this.git(checkout, ['merge-base', '--is-ancestor', base, head]).then(() => true, () => false)) return true;
-    }
-    return false;
+  // whether head descends from base, by a checkout that has both commits. when none has them, the pr's head is
+  // fetched into one, since a head pushed from another machine or a fork is in no checkout here; undefined when
+  // still missing
+  private async descends(repo: RepoName, pr: number, head: string, base: string): Promise<boolean | undefined> {
+    const checkouts = this.checkouts.get(repo) ?? [];
+    const has = async (checkout: string) => {
+      for (const sha of [head, base]) if (!(await this.git(checkout, ['cat-file', '-e', `${sha}^{commit}`]).then(() => true, () => false))) return false;
+      return true;
+    };
+    const judge = (checkout: string) => this.git(checkout, ['merge-base', '--is-ancestor', base, head]).then(() => true, () => false);
+    for (const checkout of checkouts) if (await has(checkout)) return judge(checkout);
+    const into = checkouts[0];
+    if (!into) return undefined;
+    await this.git(into, ['fetch', '--quiet', 'origin', `pull/${pr}/head`]).catch((error: Error) => this.log(`${repo} fetch of pr #${pr} failed: ${error.message}`));
+    return (await has(into)) ? judge(into) : undefined;
   }
 
   // the ci events of a poll that are on a head some pr subscription does not wait on
   private async heldHeads(repo: RepoName, events: HelmEvent[]): Promise<Set<string>> {
     const out = new Set<string>();
     const subs = Object.values(this.ledger.data.subscriptions).filter((s) => s.repo === repo && s.head);
+    const pulls = this.forgeOf(repo)?.pulls ?? [];
     for (const e of events) {
       if (e.kind !== 'ci' || e.pr === undefined || !e.sha) continue;
+      const pull = pulls.find((p) => p.number === e.pr);
       for (const s of subs) {
-        if (s.scope.kind === 'pr' && s.scope.number === e.pr && (await this.holds(repo, s, e.sha))) out.add(heldKey(s.id, e.sha));
+        if (s.scope.kind !== 'pr' || s.scope.number !== e.pr || !(await this.holds(repo, s, e.sha, e.pr))) continue;
+        out.add(heldKey(s.id, e.sha));
+        if (e.tags.includes('settled') && pull?.state === 'open' && pull.sha === e.sha) this.ledger.holdBack(s.id, e.sha);
       }
     }
     return out;
@@ -675,6 +703,15 @@ export class Daemon {
   report(b: ReportBody): ReturnType<Ledger['report']> {
     const out = this.ledger.report(b);
     for (const d of out.decisions) this.announce(d);
+    // letters already waiting for an agent that stopped go to its session instead; the mod drops its copy at the take
+    if (b.state === 'stopped' && b.agent) {
+      for (const l of this.ledger.pending(b.session, b.agent)) {
+        const taken = this.ledger.take(l.id);
+        if (!taken) continue;
+        const { id, at, ...letter } = taken;
+        this.post(letter);
+      }
+    }
     void this.pollRepo(b.repo);
     return out;
   }
@@ -759,7 +796,7 @@ export class Daemon {
       }
     }
     const live = recipient && this.ledger.live(recipient.session);
-    if (recipient && live) this.send(this.ledger.post({ session: recipient.session, ...(recipient.agent ? { agent: recipient.agent } : {}), text: lines.join('\n'), parts: [{ lines }], events: [], subs: [] }));
+    if (recipient && live) this.post({ session: recipient.session, ...(recipient.agent ? { agent: recipient.agent } : {}), text: lines.join('\n'), parts: [{ lines }], events: [], subs: [] });
     const owner = recipient?.session;
     const event: HelmEvent = {
       id: `decision:${d.id}:answered@${this.now()}`,
@@ -855,6 +892,14 @@ export class Daemon {
 
 // the engine statuses of an agent whose loop is still going
 const LOOPING: ReadonlySet<string> = new Set(['pending', 'running', 'waiting']);
+
+// a stopped agent's letter readdressed to its session's main loop, led by whose it was
+function heldFor(l: Omit<Letter, 'id' | 'at'>, w: Work): Omit<Letter, 'id' | 'at'> {
+  const { agent, ...rest } = l;
+  const note: LetterPart = { lines: [`[helm held for agent ${agent}] it reported stopped on ${workKey(w.repo, w.issue)}, so this is yours, not sent to it: dispatch the issue again or message the agent to pick the work back up`] };
+  const parts = [note, ...(l.parts ?? [{ lines: [l.text] }])];
+  return { ...rest, parts, text: letterText(parts) };
+}
 
 // what a stall stands for: the agent that left it and where its pr was, so a new head, agent or pr state is news
 function stallCondition(v: WorkView): string {

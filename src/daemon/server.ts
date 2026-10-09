@@ -126,6 +126,7 @@ export function routes(d: Daemon, stop: () => void): Route[] {
       try {
         return d.report(b);
       } catch (e) {
+        if (e instanceof ClaimError) throw new HttpError(409, e.message, { owner: e.owner });
         throw new HttpError(404, (e as Error).message);
       }
     }),

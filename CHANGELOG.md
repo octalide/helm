@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.1
+
+- The web page's Activity view lists events again. Links between views no longer carry one view's own parameters (the inbox's `kind` was filtering Activity to nothing), and the Repos view's repository tabs no longer narrow every other view (#64, #74).
+- Board columns hold their width: attention cards no longer overflow into the next lane. Selects are drawn in the page's colors, open lists included (#64, #74).
+- A CI wait fetches a PR head it has not seen (`pull/<n>/head`, so forks too) before judging whether it is the subscriber's, and delivers when it still cannot judge. A waiting agent whose verdict was held back for good reads as stalled instead of active (#65).
+- An agent that reports `stopped` parks its work: no stall is raised, and what its subscriptions deliver goes to its session instead of waking it, until the issue is dispatched again, the agent reports `working`, or its session messages it (#68).
+- A report from an agent the work has moved on from is refused (#75).
+
 ## 0.4.0
 
 Every session needs `/reload-plugins` once: the protocol moves to 2.

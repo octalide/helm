@@ -160,6 +160,115 @@ describe('daemon', () => {
     await d.stop();
   });
 
+  it('fetches a head pushed from elsewhere before judging it, and surfaces a wait it can no longer satisfy', async () => {
+    // mine -> theirs on the remote, pushed from another machine; gone is never fetchable; unrelated shares nothing
+    const [mine, theirs, gone, unrelated] = ['a', 'b', 'c', 'd'].map((c) => c.repeat(40)) as [string, string, string, string];
+    const history = [mine, theirs];
+    const known = new Set([mine, unrelated]);
+    const fetched: string[] = [];
+    const offline = { rates: {}, conditional: async () => Promise.reject(new Error('offline')) } as unknown as GitHub;
+    const git: Git = async (_cwd, args) => {
+      if (args[0] === 'config') return 'git@github.com:o/r.git\n';
+      if (args[0] === 'cat-file' && !known.has(args[2]!.replace('^{commit}', ''))) throw new Error('missing');
+      if (args[0] === 'fetch') {
+        fetched.push(args.at(-1)!);
+        known.add(theirs);
+      }
+      if (args[0] === 'merge-base') {
+        const [a, b] = [history.indexOf(args[2]!), history.indexOf(args[3]!)];
+        if (a < 0 || b < 0 || a > b) throw new Error('not an ancestor');
+      }
+      return '';
+    };
+    const green = [check('test', 'success')];
+    const pulls = [pull(160, { sha: theirs, head: 'fix/160', checks: green }), pull(161, { sha: gone, head: 'fix/161', checks: green }), pull(162, { sha: unrelated, head: 'fix/162', checks: green })];
+    const { d } = await daemon({
+      gh: offline,
+      git,
+      setup: async (home, paths) => {
+        await mkdir(join(home, 'src', 'r', '.git'), { recursive: true });
+        await mkdir(paths.repos, { recursive: true });
+        await writeFile(join(paths.repos, 'o__r.json'), JSON.stringify({ ...emptyCache(), forge: forge({ pulls }) }));
+      },
+    });
+    d.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    const wait = (agent: string, number: number) => d.subscribe({ session: 'A', agent, repo: 'o/r', scope: { kind: 'pr', number }, ci: 'settled', until: 'settled', sha: mine });
+    const caught = (agent: string) => lettersFor(d, 'A', agent).some((l) => l.text.includes('ci settled success'));
+    // missing here, present once fetched, and on top of the named head: delivered
+    await wait('pushed on top', 160);
+    expect(fetched).toEqual(['pull/160/head']);
+    // still missing after the fetch: helm cannot judge it, so it delivers
+    await wait('never fetched', 161);
+    expect(fetched).toEqual(['pull/160/head', 'pull/161/head']);
+    // present and unrelated: held back, and once a later poll still shows that head the wait reads as stalled
+    const held = await wait('unrelated', 162);
+    expect(['pushed on top', 'never fetched', 'unrelated'].filter(caught)).toEqual(['pushed on top', 'never fetched']);
+    d.ledger.claim({ session: 'A', repo: 'o/r', issue: 162, agent: 'unrelated' }, 'u');
+    d.ledger.heartbeat('A', [{ id: 'unrelated', type: 'issue', description: '', status: 'idle' }]);
+    d.ledger.report({ session: 'A', agent: 'unrelated', repo: 'o/r', issue: 162, state: 'waiting' });
+    const phase = () => d.workViews().find((v) => v.issue === 162)?.phase;
+    expect(phase()).toBe('ready');
+    d.ledger.reviewHeld('o/r', (n) => pulls.find((p) => p.number === n)?.sha);
+    expect(d.ledger.data.subscriptions[held.id]?.held).toEqual({ sha: unrelated, seen: true });
+    expect(phase()).toBe('stalled');
+    await d.stop();
+  });
+
+  it('parks work its agent stopped, sends the agent nothing, and unparks it on a dispatch, a working report or a resume', async () => {
+    const { d } = await daemon();
+    d.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    const internals = d as unknown as { dispatch: (e: HelmEvent[]) => void; refreshViews: () => void };
+    const verdict = (n: number): HelmEvent => ({ id: `ci:${n}`, kind: 'ci', repo: 'o/r', at: T0, pr: 101, sha: 'a'.repeat(40), tags: ['settled', 'success'], text: `ci settled success ${n}` });
+    const wait = (agent: string) => d.ledger.subscribe({ session: 'A', agent, repo: 'o/r', scope: { kind: 'pr', number: 101 }, ci: 'settled', until: 'settled' });
+    const phase = () => d.workViews().find((v) => v.issue === 1)!.phase;
+    const agent = (id: string, status: 'running' | 'completed') => ({ id, type: 'issue', description: '', status });
+    d.ledger.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'x' }, 'one');
+    d.heartbeat('A', [agent('x', 'running')]);
+    wait('x');
+    d.ledger.post({ session: 'A', agent: 'x', text: 'before the stop', parts: [{ lines: ['before the stop'] }], events: [], subs: [] });
+
+    d.report({ session: 'A', agent: 'x', repo: 'o/r', issue: 1, state: 'stopped', note: 'paused by owner' });
+    d.heartbeat('A', [agent('x', 'completed')]);
+    internals.refreshViews();
+    expect(phase()).toBe('parked');
+    expect(Object.values(d.ledger.data.decisions).filter((x) => x.kind === 'stall')).toEqual([]);
+    // what waited for it, and what its subscription takes now, go to the main loop
+    internals.dispatch([verdict(1)]);
+    expect(lettersFor(d, 'A', 'x')).toEqual([]);
+    const held = lettersFor(d, 'A').map((l) => l.text);
+    expect(held.filter((t) => t.startsWith('[helm held for agent x] it reported stopped on o/r#1')).length).toBe(2);
+    expect(held.join('\n')).toContain('before the stop');
+    expect(held.join('\n')).toContain('ci settled success 1');
+
+    // a working report from the agent
+    wait('x');
+    d.report({ session: 'A', agent: 'x', repo: 'o/r', issue: 1, state: 'working' });
+    expect(phase()).not.toBe('parked');
+    internals.dispatch([verdict(2)]);
+    expect(lettersFor(d, 'A', 'x').map((l) => l.text)).toEqual([expect.stringContaining('ci settled success 2')]);
+
+    // a dispatch: the new agent takes over the stopped one's subscriptions
+    const sub = wait('x');
+    d.report({ session: 'A', agent: 'x', repo: 'o/r', issue: 1, state: 'stopped' });
+    d.ledger.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'y' }, 'one');
+    expect([d.ledger.data.subscriptions[sub.id]?.agent, phase()]).toEqual(['y', 'working']);
+
+    // its session messaged it after it ended
+    d.heartbeat('A', [agent('y', 'running')]);
+    d.report({ session: 'A', agent: 'y', repo: 'o/r', issue: 1, state: 'stopped' });
+    d.heartbeat('A', [agent('y', 'completed')]);
+    expect(phase()).toBe('parked');
+    d.heartbeat('A', [agent('y', 'running')]);
+    expect(phase()).toBe('working');
+
+    // a late stopped from a replaced agent is refused and changes nothing
+    d.ledger.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'z' }, 'one');
+    const wait2 = wait('z');
+    expect(() => d.report({ session: 'A', agent: 'y', repo: 'o/r', issue: 1, state: 'stopped' })).toThrow(/agent z holds it/);
+    expect([d.ledger.data.work['o/r#1']?.report, d.ledger.data.subscriptions[wait2.id]?.agent]).toEqual([undefined, 'z']);
+    await d.stop();
+  });
+
   it('applies an edited config live and keeps the running one through a broken edit', async () => {
     const log: string[] = [];
     const { d, paths } = await daemon({ log: (line) => log.push(line) });

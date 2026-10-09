@@ -156,6 +156,10 @@ describe('phase', () => {
     const a = { ...w, agent: 'x' };
     expect(phaseOf({ ...a, report: { state: 'waiting', at: T0 } }, { agent: 'completed', pull: pull(101, { draft: true }), blocking: false, issueClosed: false })).toBe('draft');
     expect(phaseOf(a, { agent: 'gone', blocking: false, issueClosed: false })).toBe('stalled');
+    // its pr head settled ci that its subscription held back: the delivery can no longer come
+    const green = pull(101, { checks: [check('t', 'success')] });
+    expect(phaseOf({ ...a, report: { state: 'waiting', at: T0 } }, { agent: 'idle', pull: green, blocking: false, issueClosed: false, stuck: true })).toBe('stalled');
+    expect(phaseOf({ ...a, report: { state: 'waiting', at: T0 } }, { agent: 'running', pull: green, blocking: false, issueClosed: false, stuck: true })).toBe('ready');
   });
 
   it('counts a live session working an issue itself as its worker', () => {
@@ -168,7 +172,7 @@ describe('phase', () => {
     expect([hasWorker(self), hasWorker({ ...w, agent: 'x' }), hasWorker({ ...w, owner: 'A' })]).toEqual([true, true, false]);
   });
 
-  it('parks work set aside by a label or an open blocker while nobody is on it', () => {
+  it('parks work set aside by a label or an open blocker while nobody is on it, and stopped work', () => {
     const p = pull(101, { draft: true });
     const labelled = forge({ issues: [issue(1, { labels: ['Blocked'] })], pulls: [p] });
     const waiting = forge({ issues: [issue(1, { blockedBy: 1 })], pulls: [p] });
@@ -178,6 +182,8 @@ describe('phase', () => {
     expect(viewOf(w, forge({ issues: [issue(1, { labels: ['parked'] })] }), undefined, new Map(), [], T0).phase).toBe('parked');
     expect(phaseOf(a, { agent: 'running', pull: p, blocking: false, issueClosed: false, setAside: true })).toBe('draft');
     expect(phaseOf(a, { agent: 'gone', pull: p, blocking: true, issueClosed: false, setAside: true })).toBe('blocked');
+    // a stopped report sets it aside whatever its agent is doing
+    expect(['running', 'completed', 'gone'].map((agent) => phaseOf({ ...a, report: { state: 'stopped', at: T0 } }, { agent: agent as 'running', pull: p, blocking: false, issueClosed: false }))).toEqual(['parked', 'parked', 'parked']);
   });
 
   it('finds the pr by closing reference or branch and the worktree by branch', () => {

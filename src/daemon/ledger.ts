@@ -1,7 +1,7 @@
 import type { ClaimBody, DecisionBody, QueueBody, RegisterBody, ReportBody, SubscribeBody } from '../core/protocol.ts';
 import { isOpen } from '../core/decision.ts';
 import { workKey } from '../core/protocol.ts';
-import type { AgentRecord, Answer, Audience, Decision, HelmEvent, Leftover, Letter, Phase, Session, SessionRole, Subscription, Work } from '../core/types.ts';
+import type { AgentRecord, Answer, Audience, Decision, HelmEvent, Leftover, Letter, Phase, RepoName, Session, SessionRole, Subscription, Work } from '../core/types.ts';
 
 // bumped when the stored shape changes; an older file is migrated or refused, never read as this one
 export const LEDGER_VERSION = 2;
@@ -155,6 +155,25 @@ export class Ledger {
     return sub;
   }
 
+  // a subscription held back the settled ci of its pr's head
+  holdBack(id: string, sha: string): void {
+    const sub = this.data.subscriptions[id];
+    if (!sub || sub.held?.sha === sha) return;
+    sub.held = { sha };
+    this.changed();
+  }
+
+  // a poll's view of each held head: still the pr's head with ci settled is seen, anything else lets it go
+  reviewHeld(repo: RepoName, settledHead: (pr: number) => string | undefined): void {
+    for (const sub of Object.values(this.data.subscriptions)) {
+      if (sub.repo !== repo || !sub.held || sub.scope.kind !== 'pr') continue;
+      if (settledHead(sub.scope.number) !== sub.held.sha) delete sub.held;
+      else if (sub.held.seen) continue;
+      else sub.held.seen = true;
+      this.changed();
+    }
+  }
+
   unsubscribe(id: string): boolean {
     if (!this.data.subscriptions[id]) return false;
     delete this.data.subscriptions[id];
@@ -207,8 +226,35 @@ export class Ledger {
       ...(b.agent ? { agent: b.agent, claimedAt: b.agent === base.agent ? (base.claimedAt ?? now) : now } : {}),
       ...(b.routing ? { routing: b.routing } : {}),
     };
-    if (b.agent && b.agent !== base.agent) delete w.report;
+    if (b.agent && b.agent !== base.agent) {
+      // a new agent on stopped work takes up what the stopped one still waited on
+      if (base.agent && base.owner && base.report?.state === 'stopped') this.handOver(base.owner, base.agent, b.session, b.agent);
+      delete w.report;
+    }
     this.data.work[key] = w;
+    this.changed();
+    return w;
+  }
+
+  private handOver(session: string, agent: string, to: string, toAgent: string): void {
+    for (const sub of Object.values(this.data.subscriptions)) {
+      if (sub.session !== session || sub.agent !== agent) continue;
+      sub.session = to;
+      sub.agent = toAgent;
+    }
+  }
+
+  // the unfinished work an agent reported stopped on: what reaches it would resume it, so it goes to its session instead
+  stopped(session: string, agent: string): Work | undefined {
+    return Object.values(this.data.work).find((w) => !w.finished && w.owner === session && w.agent === agent && w.report?.state === 'stopped');
+  }
+
+  // a stopped agent running again: its owner picked it back up, so the stop no longer holds
+  resume(session: string, agent: string): Work | undefined {
+    const w = this.stopped(session, agent);
+    if (!w) return undefined;
+    delete w.report;
+    w.updatedAt = this.now();
     this.changed();
     return w;
   }
@@ -217,6 +263,7 @@ export class Ledger {
     const key = workKey(b.repo, b.issue);
     const w = this.data.work[key];
     if (!w) throw new Error(`${key} is not in the ledger: claim it first`);
+    if (b.agent && w.agent && b.agent !== w.agent) throw new ClaimError(`${key} has moved on: agent ${w.agent} holds it, not ${b.agent}`, w.owner ?? b.session);
     const now = this.now();
     w.report = { state: b.state, at: now, ...(b.note ? { note: b.note } : {}) };
     if (b.agent && !w.agent) w.agent = b.agent;
