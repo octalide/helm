@@ -35,7 +35,7 @@ local git (worktrees, branches) ─┤
             issue agents ── report, watch, view, log
 ```
 
-**helmd** is the only process that talks to GitHub. The first session to need it starts it, and a session running a newer helm replaces an older one. It polls each repository in use: those a live session works in, those with unfinished work or a subscription, and any a tool asked about lately. Two conditional probes per poll cost nothing when nothing moved, and the snapshot (open and recent issues and PRs, every check on each PR head, last comment and review) is read only when a probe moved. Active repositories poll every 20 s, the rest every 3 minutes. Jobs and their steps are read live while a run is in flight. Everything helmd holds survives a restart.
+**helmd** is the only process that talks to GitHub. The first session to need it starts it, and a session that finds an older one replaces it. Either way the session runs the newest helmd installed beside its mod that speaks its protocol, so whichever session starts or replaces it lands on the newest. It polls each repository in use: those a live session works in, those with unfinished work or a subscription, and any a tool asked about lately. Two conditional probes per poll cost nothing when nothing moved, and the snapshot (open and recent issues and PRs, every check on each PR head, last comment and review) is read only when a probe moved. Active repositories poll every 20 s, the rest every 3 minutes. Jobs and their steps are read live while a run is in flight. Everything helmd holds survives a restart.
 
 **The mod** binds each session to helmd. It registers the session and its agents, streams the session's deliveries, serves the tools, draws the pane, and tells repository and coordinator sessions how to work with helm through a section of their system prompt, so no instruction file has to.
 
@@ -157,7 +157,7 @@ State lives under `$XDG_STATE_HOME/helm` and the socket under `$XDG_RUNTIME_DIR/
 helmd start | stop | restart | status | serve | stream <session> | version
 ```
 
-`bin/helmd` runs it from a checkout. Sessions start it on their own.
+`bin/helmd` runs it from a checkout. Sessions start it on their own. `restart` hands over without a gap: the new daemon takes the lock and the socket while the old one still answers, then stops it and serves once it has saved.
 
 ## Development
 

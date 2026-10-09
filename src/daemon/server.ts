@@ -259,12 +259,16 @@ const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.j
 export type Listeners = { socket: Server; web?: Server };
 
 // the same routes on two listeners: the socket, which only the user can open, and 127.0.0.1 for the page, where a
-// request is taken only when its host is this server and a write only when it comes from this server's own page
-export function handler(table: Route[], opts: { web: boolean; port?: number; static?: string }) {
+// request is taken only when its host is this server and a write only when it comes from this server's own page.
+// ready: until it settles only health is answered, and every other request waits for it
+export function handler(table: Route[], opts: { web: boolean; port?: number; static?: string; ready?: Promise<void> }) {
   const hosts = new Set([`127.0.0.1:${opts.port}`, `localhost:${opts.port}`]);
   const origins = new Set([...hosts].map((h) => `http://${h}`));
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const url = new URL(req.url ?? '/', 'http://helmd');
+    // no connection outlives its request on the socket, so each request finds the daemon that holds the path now and
+    // none is cut when a replaced daemon closes an idle one under it
+    if (!opts.web) res.setHeader('connection', 'close');
     try {
       if (opts.web) {
         if (!hosts.has(req.headers.host ?? '')) throw new HttpError(421, 'unknown host');
@@ -273,6 +277,7 @@ export function handler(table: Route[], opts: { web: boolean; port?: number; sta
       }
       const route = table.find((r) => r.method === req.method && r.pattern.test(url.pathname));
       if (!route || (opts.web && !route.web)) throw new HttpError(404, `no route ${req.method} ${url.pathname}`);
+      if (opts.ready && url.pathname !== '/v1/health') await opts.ready;
       const params = { ...(route.pattern.exec(url.pathname)?.groups ?? {}) };
       let body: Promise<unknown> | undefined;
       const out = await route.handler({ req, res, params, query: url.searchParams, body: () => (body ??= readBody(req)) });
