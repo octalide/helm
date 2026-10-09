@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2
+
+- An answer to a decision reaches the session that asked once, not twice (#36).
+
 ## 0.2.1
 
 - Work that finished while helm was not watching is marked finished, dated when it closed, and work whose PR merged finishes as merged (#31).
