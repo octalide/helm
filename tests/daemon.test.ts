@@ -214,6 +214,55 @@ describe('daemon', () => {
     await d.stop();
   });
 
+  it('parks work its agent stopped, sends the agent nothing, and unparks it on a dispatch, a working report or a resume', async () => {
+    const { d } = await daemon();
+    d.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    const internals = d as unknown as { dispatch: (e: HelmEvent[]) => void; refreshViews: () => void };
+    const verdict = (n: number): HelmEvent => ({ id: `ci:${n}`, kind: 'ci', repo: 'o/r', at: T0, pr: 101, sha: 'a'.repeat(40), tags: ['settled', 'success'], text: `ci settled success ${n}` });
+    const wait = (agent: string) => d.ledger.subscribe({ session: 'A', agent, repo: 'o/r', scope: { kind: 'pr', number: 101 }, ci: 'settled', until: 'settled' });
+    const phase = () => d.workViews().find((v) => v.issue === 1)!.phase;
+    const agent = (id: string, status: 'running' | 'completed') => ({ id, type: 'issue', description: '', status });
+    d.ledger.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'x' }, 'one');
+    d.heartbeat('A', [agent('x', 'running')]);
+    wait('x');
+    d.ledger.post({ session: 'A', agent: 'x', text: 'before the stop', parts: [{ lines: ['before the stop'] }], events: [], subs: [] });
+
+    d.report({ session: 'A', agent: 'x', repo: 'o/r', issue: 1, state: 'stopped', note: 'paused by owner' });
+    d.heartbeat('A', [agent('x', 'completed')]);
+    internals.refreshViews();
+    expect(phase()).toBe('parked');
+    expect(Object.values(d.ledger.data.decisions).filter((x) => x.kind === 'stall')).toEqual([]);
+    // what waited for it, and what its subscription takes now, go to the main loop
+    internals.dispatch([verdict(1)]);
+    expect(lettersFor(d, 'A', 'x')).toEqual([]);
+    const held = lettersFor(d, 'A').map((l) => l.text);
+    expect(held.filter((t) => t.startsWith('[helm held for agent x] it reported stopped on o/r#1')).length).toBe(2);
+    expect(held.join('\n')).toContain('before the stop');
+    expect(held.join('\n')).toContain('ci settled success 1');
+
+    // a working report from the agent
+    wait('x');
+    d.report({ session: 'A', agent: 'x', repo: 'o/r', issue: 1, state: 'working' });
+    expect(phase()).not.toBe('parked');
+    internals.dispatch([verdict(2)]);
+    expect(lettersFor(d, 'A', 'x').map((l) => l.text)).toEqual([expect.stringContaining('ci settled success 2')]);
+
+    // a dispatch: the new agent takes over the stopped one's subscriptions
+    const sub = wait('x');
+    d.report({ session: 'A', agent: 'x', repo: 'o/r', issue: 1, state: 'stopped' });
+    d.ledger.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'y' }, 'one');
+    expect([d.ledger.data.subscriptions[sub.id]?.agent, phase()]).toEqual(['y', 'working']);
+
+    // its session messaged it after it ended
+    d.heartbeat('A', [agent('y', 'running')]);
+    d.report({ session: 'A', agent: 'y', repo: 'o/r', issue: 1, state: 'stopped' });
+    d.heartbeat('A', [agent('y', 'completed')]);
+    expect(phase()).toBe('parked');
+    d.heartbeat('A', [agent('y', 'running')]);
+    expect(phase()).toBe('working');
+    await d.stop();
+  });
+
   it('applies an edited config live and keeps the running one through a broken edit', async () => {
     const log: string[] = [];
     const { d, paths } = await daemon({ log: (line) => log.push(line) });

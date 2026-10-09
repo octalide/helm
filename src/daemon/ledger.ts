@@ -226,8 +226,35 @@ export class Ledger {
       ...(b.agent ? { agent: b.agent, claimedAt: b.agent === base.agent ? (base.claimedAt ?? now) : now } : {}),
       ...(b.routing ? { routing: b.routing } : {}),
     };
-    if (b.agent && b.agent !== base.agent) delete w.report;
+    if (b.agent && b.agent !== base.agent) {
+      // a new agent on stopped work takes up what the stopped one still waited on
+      if (base.agent && base.owner && base.report?.state === 'stopped') this.handOver(base.owner, base.agent, b.session, b.agent);
+      delete w.report;
+    }
     this.data.work[key] = w;
+    this.changed();
+    return w;
+  }
+
+  private handOver(session: string, agent: string, to: string, toAgent: string): void {
+    for (const sub of Object.values(this.data.subscriptions)) {
+      if (sub.session !== session || sub.agent !== agent) continue;
+      sub.session = to;
+      sub.agent = toAgent;
+    }
+  }
+
+  // the unfinished work an agent reported stopped on: what reaches it would resume it, so it goes to its session instead
+  stopped(session: string, agent: string): Work | undefined {
+    return Object.values(this.data.work).find((w) => !w.finished && w.owner === session && w.agent === agent && w.report?.state === 'stopped');
+  }
+
+  // a stopped agent running again: its owner picked it back up, so the stop no longer holds
+  resume(session: string, agent: string): Work | undefined {
+    const w = this.stopped(session, agent);
+    if (!w) return undefined;
+    delete w.report;
+    w.updatedAt = this.now();
     this.changed();
     return w;
   }

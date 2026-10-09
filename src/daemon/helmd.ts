@@ -7,7 +7,8 @@ import { isRecord } from '../core/decision.ts';
 import type { AnswerBody, Answered, ClaimBody, ConfigView, DecisionBody, EscalateBody, IssueDetail, QueueBody, RegisterBody, ReportBody, StreamFrame, SubscribeBody } from '../core/protocol.ts';
 import { PROTOCOL, workKey } from '../core/protocol.ts';
 import type { HelmPaths } from '../core/paths.ts';
-import type { AgentRecord, Decision, Fleet, ForgeState, HelmEvent, Letter, LocalState, Phase, PollStatus, Pull, RepoName, RepoView, Session, SessionRole, Subscription, TreeNode, WorkView } from '../core/types.ts';
+import type { AgentRecord, Decision, Fleet, ForgeState, HelmEvent, Letter, LetterPart, LocalState, Phase, PollStatus, Pull, RepoName, RepoView, Session, SessionRole, Subscription, TreeNode, Work, WorkView } from '../core/types.ts';
+import { letterText } from '../core/letter.ts';
 import { route } from './deliver.ts';
 import { buildTree } from '../core/tree.ts';
 import { hasWorker, selfWorked } from '../core/work.ts';
@@ -379,9 +380,15 @@ export class Daemon {
     for (const e of events) byRepo.set(e.repo ?? '', [...(byRepo.get(e.repo ?? '') ?? []), e]);
     for (const [repo, batch] of byRepo) {
       const { letters, retired } = route(batch, subs, this.context(repo || undefined, opts.held), this.now());
-      for (const l of letters) this.send(this.ledger.post(l));
+      for (const l of letters) this.post(l);
       for (const id of retired) this.ledger.unsubscribe(id);
     }
+  }
+
+  // a letter for an agent that reported stopped goes to its session's main loop, since sending it would resume the agent
+  private post(l: Omit<Letter, 'id' | 'at'>): void {
+    const w = l.agent !== undefined ? this.ledger.stopped(l.session, l.agent) : undefined;
+    this.send(this.ledger.post(w ? heldFor(l, w) : l));
   }
 
   private send(letter: Letter): void {
@@ -556,6 +563,8 @@ export class Daemon {
     for (const a of agents) {
       const was = before.get(a.id);
       if (!LOOPING.has(a.status) && (was === undefined || LOOPING.has(was))) void this.agentEnded(id, a.id);
+      // one that ended and runs again was messaged by its session, which lifts a stop it reported
+      if (LOOPING.has(a.status) && was !== undefined && !LOOPING.has(was)) this.ledger.resume(id, a.id);
     }
     for (const [agent, was] of before) if (LOOPING.has(was) && !agents.some((a) => a.id === agent)) void this.agentEnded(id, agent);
     return s;
@@ -694,6 +703,15 @@ export class Daemon {
   report(b: ReportBody): ReturnType<Ledger['report']> {
     const out = this.ledger.report(b);
     for (const d of out.decisions) this.announce(d);
+    // letters already waiting for an agent that stopped go to its session instead; the mod drops its copy at the take
+    if (b.state === 'stopped' && b.agent) {
+      for (const l of this.ledger.pending(b.session, b.agent)) {
+        const taken = this.ledger.take(l.id);
+        if (!taken) continue;
+        const { id, at, ...letter } = taken;
+        this.post(letter);
+      }
+    }
     void this.pollRepo(b.repo);
     return out;
   }
@@ -778,7 +796,7 @@ export class Daemon {
       }
     }
     const live = recipient && this.ledger.live(recipient.session);
-    if (recipient && live) this.send(this.ledger.post({ session: recipient.session, ...(recipient.agent ? { agent: recipient.agent } : {}), text: lines.join('\n'), parts: [{ lines }], events: [], subs: [] }));
+    if (recipient && live) this.post({ session: recipient.session, ...(recipient.agent ? { agent: recipient.agent } : {}), text: lines.join('\n'), parts: [{ lines }], events: [], subs: [] });
     const owner = recipient?.session;
     const event: HelmEvent = {
       id: `decision:${d.id}:answered@${this.now()}`,
@@ -874,6 +892,14 @@ export class Daemon {
 
 // the engine statuses of an agent whose loop is still going
 const LOOPING: ReadonlySet<string> = new Set(['pending', 'running', 'waiting']);
+
+// a stopped agent's letter readdressed to its session's main loop, led by whose it was
+function heldFor(l: Omit<Letter, 'id' | 'at'>, w: Work): Omit<Letter, 'id' | 'at'> {
+  const { agent, ...rest } = l;
+  const note: LetterPart = { lines: [`[helm held for agent ${agent}] it reported stopped on ${workKey(w.repo, w.issue)}, so this is yours, not sent to it: dispatch the issue again or message the agent to pick the work back up`] };
+  const parts = [note, ...(l.parts ?? [{ lines: [l.text] }])];
+  return { ...rest, parts, text: letterText(parts) };
+}
 
 // what a stall stands for: the agent that left it and where its pr was, so a new head, agent or pr state is news
 function stallCondition(v: WorkView): string {
