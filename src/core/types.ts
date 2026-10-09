@@ -171,6 +171,19 @@ export type Session = {
   seenAt: number;
   // set once a heartbeat is overdue; a session that comes back clears it
   gone?: boolean;
+  // what this session took over by succession and has not given back, oldest first
+  adoptions?: AdoptionRecord[];
+};
+
+// one succession: what moved to the adopting session and what each thing was before, so it can be given back exactly.
+// a work item is still the adoption's while its owner is unchanged, its agent is the one it came with and nobody has
+// reported on it since
+export type AdoptionRecord = {
+  at: number;
+  repo: RepoName;
+  work: { key: string; agent?: string; was: Pick<Work, 'owner' | 'order' | 'report' | 'adopted'> }[];
+  subscriptions: { id: string; agent?: string; was: string }[];
+  decisions: { id: string; was: Pick<Decision, 'to' | 'session' | 'escalated'> }[];
 };
 
 export type Tier = {

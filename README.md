@@ -41,7 +41,7 @@ local git (worktrees, branches) ─┤
 
 ## Roles
 
-A session in a repository is a **repo** session for it. Set the role with `HELM_ROLE=coordinator|repo|other` at launch, or with `/helm role coordinator`.
+Set the role with `HELM_ROLE=coordinator|repo|other` at launch, or with `/helm role coordinator`. A role asked for wins. Otherwise helmd keeps the role a session already has, and gives a new one the role of the session it goes on from after a `/clear` or a resume, or else makes it the **repo** session of the repository it runs in. The mod takes its role and repository from helmd's answer.
 
 - **Repo session.** Owns a repository's issues. It queues them with `backlog`, starts agents with `dispatch`, and hears its own work move (`[helm work]` deliveries) without polling.
 - **Coordinator.** Sees the fleet (`view` with `what: fleet` or `what: tree`), hears each epic's progress, every decision for the person and any work that needs someone, and talks to repository sessions with SendMessage.
@@ -88,6 +88,8 @@ Work moves through `queued → working → draft → ci → ready → done`, wit
 ## Succession
 
 A repo session that registers in a repository whose other repo sessions are all gone, or is the one live repo session left when another goes, takes over their unfinished work: the backlog in its order, the claims, the subscriptions, and the open decisions addressed to them or handed to the person only because their session was gone. A decision a session escalated itself stays the person's. Each item records `adopted: { from, at }`, and the new session hears it as one `[helm adopted]` delivery listing what it took and which items to dispatch again. An agent that came with adopted work is gone with its old session: what its subscriptions deliver goes to the new session's main loop, and the agent a new dispatch starts takes the subscriptions over. Nothing is taken from a live session, and a coordinator or an `other` session never adopts repository work. A session resumed under its own id keeps everything, as before. After a `/clear` or an in-process resume the process goes on under a new id, and the mod names the old one when it registers, so helmd hands it over whole and at once.
+
+The adopting session records what it took. Once it is no longer the repo session of that repository (it takes another role or another repository), it gives back what it has not acted on: work whose owner is unchanged, whose agent is the one it came with and that nobody has reported on since, with the subscriptions and open decisions that came with it and the open decisions addressed to it about that work. They go back to the session they came from and on from there by the same succession, to a live repo session of the repository or, for a decision, to the person. The session hears it as one `[helm gave back]` delivery.
 
 ## Hierarchy
 

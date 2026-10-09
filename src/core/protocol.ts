@@ -2,7 +2,7 @@ import { compareVersions } from './repo.ts';
 import type { AgentRecord, CiFilter, Decision, DecisionKind, Effort, Letter, PlanStep, ReportState, RepoName, Routing, Scope, SessionRole, Tier, Until } from './types.ts';
 
 // bumped when a route or a body changes shape; a mod that finds an older daemon replaces it
-export const PROTOCOL = 2;
+export const PROTOCOL = 3;
 
 export type Health = { version: string; protocol: number; pid: number; startedAt: number; web?: string };
 
@@ -15,8 +15,10 @@ export function daemonAction(up: Pick<Health, 'version' | 'protocol'> | undefine
   return 'use';
 }
 
-// from: the session this one goes on from in the same process, as a /clear or a resume ended it
-export type RegisterBody = { id: string; cwd: string; role?: SessionRole; repo?: RepoName; title?: string; from?: string };
+// from: the session this one goes on from in the same process, as a /clear or a resume ended it. role is the role the
+// session was asked to take; repo is its checkout's, a default for a session helmd does not know. protocol is the mod's:
+// before 3 a mod sent the role it guessed, which only defaults a new session
+export type RegisterBody = { id: string; cwd: string; role?: SessionRole; repo?: RepoName; title?: string; from?: string; protocol?: number };
 
 export type HeartbeatBody = { agents: AgentRecord[] };
 

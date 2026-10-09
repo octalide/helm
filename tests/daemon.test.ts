@@ -299,6 +299,26 @@ describe('daemon', () => {
     await d.stop();
   });
 
+  it('gives back what a session adopted once it leaves the repo role, and the repository\'s live repo session takes it', async () => {
+    const { d } = await daemon();
+    d.register({ id: 'A', cwd: '/', repo: 'o/r', protocol: 3 });
+    d.queue({ session: 'A', repo: 'o/r', issues: [1, 2] });
+    d.endSession('A');
+    // a coordinator that registered before its role was set took A's work as the repository's repo session
+    expect(d.register({ id: 'B', cwd: '/', repo: 'o/r', protocol: 3 }).role).toBe('repo');
+    d.register({ id: 'D', cwd: '/', repo: 'o/r', protocol: 3 });
+    expect([d.ledger.data.work['o/r#1']!.owner, lettersFor(d, 'D')]).toEqual(['B', []]);
+    d.setRole('B', 'coordinator');
+    expect(lettersFor(d, 'B').find((l) => l.text.startsWith('[helm gave back]'))!.text.split('\n')).toEqual([
+      '[helm gave back]',
+      'this session is not the repository session its adoptions were for, so it gave back what it had not acted on to session A: 2 items',
+      'work: o/r#1 o/r#2',
+    ]);
+    expect([d.ledger.data.work['o/r#1']!.owner, d.ledger.data.work['o/r#2']!.adopted?.from]).toEqual(['D', 'A']);
+    expect(lettersFor(d, 'D').map((l) => l.text.split('\n')[1])).toEqual(['this session took over the unfinished work of gone session A: 2 items, backlog order kept']);
+    await d.stop();
+  });
+
   it('applies an edited config live and keeps the running one through a broken edit', async () => {
     const log: string[] = [];
     const { d, paths } = await daemon({ log: (line) => log.push(line) });
