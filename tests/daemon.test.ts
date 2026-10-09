@@ -6,7 +6,7 @@ import { DEFAULT_CONFIG } from '../src/core/config.ts';
 import { type HelmPaths, helmPaths } from '../src/core/paths.ts';
 import type { GitHub } from '../src/daemon/github.ts';
 import { Daemon } from '../src/daemon/helmd.ts';
-import { T0 } from './fixtures.ts';
+import { T0, table } from './fixtures.ts';
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -81,6 +81,33 @@ describe('daemon', () => {
     await d.reloadConfig();
     expect((await d.configFor()).routing.fallback).toBe('deep');
     expect(log.at(-1)).toMatch(/keeping the running one: .*names no tier/);
+    await d.stop();
+  });
+
+  it('reports what an ended agent left running in its worktree, and kills nothing', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'helm-test-'));
+    dirs.push(home);
+    const repo = join(home, 'src', 'r');
+    const wt = join(repo, '.claude', 'worktrees', 'fix', '7');
+    await mkdir(join(repo, '.git'), { recursive: true });
+    await mkdir(wt, { recursive: true });
+    const git = async (_cwd: string, args: string[]) => {
+      if (args[0] === 'config') return 'git@github.com:o/r.git';
+      if (args[0] === 'worktree') return `worktree ${repo}\nHEAD a\nbranch refs/heads/dev\n\nworktree ${wt}\nHEAD b\nbranch refs/heads/fix/7\n`;
+      return '';
+    };
+    const gh = { rates: {}, conditional: async () => Promise.reject(new Error('offline')) } as unknown as GitHub;
+    const procs = table({ 40: [wt, 'sh -c until false; do :; done'], 41: [repo, 'claude'] });
+    const d = new Daemon({ paths: helmPaths({ HOME: home, HELM_HOME: home }), config: { ...DEFAULT_CONFIG, roots: [join(home, 'src')] }, gh, version: '0', now: () => T0, loops: false, git, procs });
+    await d.start();
+    d.register({ id: 'A', cwd: repo, repo: 'o/r' });
+    await d.ask('o/r');
+    d.ledger.claim({ session: 'A', repo: 'o/r', issue: 7, agent: 'x' }, 'seven');
+    const agent = { id: 'x', type: 'issue', description: '' };
+    d.heartbeat('A', [{ ...agent, status: 'running' }]);
+    d.heartbeat('A', [{ ...agent, status: 'completed' }]);
+    await vi.waitFor(() => expect(d.ledger.data.work['o/r#7']?.leftovers).toEqual([{ pid: 40, command: 'sh -c until false; do :; done' }]));
+    expect(lettersFor(d, 'A').some((l) => l.text.includes('agent x ended and left 1 process running') && l.text.includes('pid 40'))).toBe(true);
     await d.stop();
   });
 });

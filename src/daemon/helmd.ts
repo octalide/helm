@@ -17,6 +17,7 @@ import type { GitHub } from './github.ts';
 import { emptyLedger, Ledger, type LedgerData } from './ledger.ts';
 import { discover, type Git, git as realGit, scan } from './local.ts';
 import { readJson, Saver, writeJson } from './persist.ts';
+import { leftovers, type ProcTable, procfs } from './procs.ts';
 import { emptyCache, type RepoCache, RepoPoller } from './poller.ts';
 import { ended, expired, type MatchContext } from './watch.ts';
 
@@ -30,6 +31,7 @@ export type DaemonDeps = {
   git?: Git;
   // off in tests, which drive polls by hand
   loops?: boolean;
+  procs?: ProcTable;
   // told of every config applied after start, for what lives outside the daemon such as the web listener
   onConfig?: (next: Config, prev: Config) => void;
 };
@@ -75,6 +77,7 @@ export class Daemon {
   private readonly now: () => number;
   private readonly log: (line: string) => void;
   private readonly git: Git;
+  private readonly procs: ProcTable;
   private readonly loops: boolean;
   private readonly onConfig: (next: Config, prev: Config) => void;
   private readonly pollers = new Map<RepoName, RepoPoller>();
@@ -106,6 +109,7 @@ export class Daemon {
     this.now = deps.now ?? Date.now;
     this.log = deps.log ?? (() => {});
     this.git = deps.git ?? realGit;
+    this.procs = deps.procs ?? procfs();
     this.loops = deps.loops ?? true;
     this.onConfig = deps.onConfig ?? (() => {});
     this.startedAt = this.now();
@@ -530,7 +534,44 @@ export class Daemon {
   }
 
   heartbeat(id: string, agents: AgentRecord[]): Session | undefined {
-    return this.ledger.heartbeat(id, agents);
+    const before = new Map((this.ledger.data.sessions[id]?.agents ?? []).map((a) => [a.id, a.status]));
+    const s = this.ledger.heartbeat(id, agents);
+    if (!s) return undefined;
+    // an agent whose loop stopped since the last beat, or that came and went between two
+    for (const a of agents) {
+      const was = before.get(a.id);
+      if (!LOOPING.has(a.status) && (was === undefined || LOOPING.has(was))) void this.agentEnded(id, a.id);
+    }
+    for (const [agent, was] of before) if (LOOPING.has(was) && !agents.some((a) => a.id === agent)) void this.agentEnded(id, agent);
+    return s;
+  }
+
+  // what an ended agent left running in its work's worktree goes on the work item, and to its owner when there is any
+  async agentEnded(session: string, agent: string): Promise<void> {
+    for (const v of this.workViews()) {
+      if (v.owner !== session || v.agent !== agent || v.finished || !v.worktree || v.worktree.main) continue;
+      const found = await leftovers(v.worktree.path, this.procs).catch((error: Error) => {
+        this.log(`process scan of ${v.worktree!.path} failed: ${error.message}`);
+        return [];
+      });
+      this.ledger.leftovers(v.repo, v.issue, found);
+      if (!found.length) continue;
+      const key = workKey(v.repo, v.issue);
+      this.dispatch([
+        {
+          id: `work:${key}:leftovers@${this.now()}`,
+          kind: 'work',
+          repo: v.repo,
+          issue: v.issue,
+          at: this.now(),
+          tags: ['leftovers'],
+          text: `${key} agent ${agent} ended and left ${found.length} process${found.length === 1 ? '' : 'es'} running in ${v.worktree.path}: ${v.title}`,
+          detail: [...found.map((p) => `pid ${p.pid}: ${p.command.slice(0, 200)}`), 'helm kills nothing: whoever owns the work decides'],
+          ...(v.pull ? { url: v.pull.url } : v.issueUrl ? { url: v.issueUrl } : {}),
+          owner: session,
+        },
+      ]);
+    }
   }
 
   setRole(id: string, role: SessionRole, repo?: RepoName): Session | undefined {
@@ -707,6 +748,9 @@ export class Daemon {
     await writeJson(this.paths.ledger, this.ledger.data);
   }
 }
+
+// the engine statuses of an agent whose loop is still going
+const LOOPING: ReadonlySet<string> = new Set(['pending', 'running', 'waiting']);
 
 // what a stall stands for: the agent that left it and where its pr was, so a new head, agent or pr state is news
 function stallCondition(v: WorkView): string {

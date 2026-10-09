@@ -1,4 +1,5 @@
 import type { Check, ForgeState, Issue, Pull, Run } from '../src/core/types.ts';
+import type { ProcTable } from '../src/daemon/procs.ts';
 
 export const T0 = Date.parse('2026-10-01T12:00:00Z');
 export const iso = (ms: number) => new Date(ms).toISOString();
@@ -39,3 +40,9 @@ export function run(id: number, over: Partial<Run> = {}): Run {
 export function forge(over: Partial<ForgeState> = {}): ForgeState {
   return { repo: 'o/r', defaultBranch: 'dev', issues: [], pulls: [], runs: [], children: {}, polledAt: T0, ...over };
 }
+// a process table of pid -> [cwd, cmdline]; an absent cwd is a process not readable by this user
+export const table = (procs: Record<number, [string | undefined, string]>): ProcTable => ({
+  pids: async () => Object.keys(procs).map(Number),
+  cwd: async (pid) => procs[pid]?.[0],
+  command: async (pid) => procs[pid]?.[1],
+});

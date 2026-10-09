@@ -8,8 +8,8 @@ export const DEFAULT_ITEM_TAGS: Record<string, readonly string[]> = {
   branch: [],
   run: [],
   tag: [],
-  work: ['phase', 'answered'],
-  fleet: ['phase', 'decision', 'answered', 'progress'],
+  work: ['phase', 'answered', 'leftovers'],
+  fleet: ['phase', 'decision', 'answered', 'progress', 'leftovers'],
 };
 
 const ATTENTION: ReadonlySet<string> = new Set(['blocked', 'failing', 'stalled']);

@@ -164,6 +164,7 @@ function workRows(w: WorkView, o: { cols: number; fleet: boolean; now: number })
     }
     rows.push(row);
   }
+  for (const p of w.leftovers ?? []) rows.push([pad, { text: `left running pid ${p.pid} `, color: 'warning' }, { text: p.command, dim: true }]);
   if (wide) {
     const meta = [w.agent ? `agent ${w.agentStatus ?? '?'}` : selfWorked(w) ? 'its session' : 'no agent', w.routing ? `${w.routing.tier ?? ''} ${short(w.routing.model)}/${w.routing.effort}`.trim() : '', w.pull ? `pr #${w.pull.number}${w.pull.draft ? ' draft' : ''}` : '', w.decisions ? `${w.decisions} decision${w.decisions === 1 ? '' : 's'}` : ''].filter(Boolean);
     rows.push([pad, { text: meta.join(' · '), dim: true }]);

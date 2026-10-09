@@ -91,6 +91,8 @@ GitHub's sub-issues draw the tree. Every open issue with sub-issues that no othe
 
 Each work item keeps when it entered each phase, and finished work stays 30 days, so the page can draw a timeline. A coordinator hears an epic as one `[helm epic]` delivery whenever anything under it moves, carrying its rollup and every phase change under it in that batch, instead of a delivery per child. Work that needs someone still arrives at once.
 
+When an issue agent's loop ends, helmd looks for live processes whose working directory is inside that work's worktree (Linux `/proc`, and a host without it reports nothing). What it finds goes on the work item as `leftovers` and to the owner as a `[helm work]` delivery tagged `leftovers`, shown in the pane and the drawer. helm never kills them: whoever owns the work decides.
+
 ## Routing
 
 `dispatch` sends each issue to a **tier**: a model and an effort with a description of the work that belongs there. The judge (`claude-haiku-5-5` by default) reads the issue against the tiers and answers a tier, a confidence and a reason. Each pick is logged as a decision for review, and answering it with another tier reroutes the issue. Name a tier in `dispatch` to skip the judge. A session registers an agent type for every tier and for the model and effort of every work item it owns, so an agent dispatched on a tier since removed can still be resumed. A session picks up a changed tier table on `/reload-plugins`.
