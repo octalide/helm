@@ -83,6 +83,11 @@ button.primary { background: var(--ink); border-color: var(--ink); color: var(--
 button.quiet { background: none; border-color: transparent; color: var(--ink-2); }
 button.quiet:hover { border-color: var(--line); }
 button.mini { padding: 0 6px; font-size: 11px; }
+/* a select draws its own chevron in the page's colors, and its open list takes the theme through color-scheme */
+select { appearance: none; color-scheme: inherit; font: inherit; color: var(--ink); cursor: pointer; background-color: transparent; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: right 12px top 55%, right 8px top 55%; background-size: 4px 4px; background-repeat: no-repeat; }
+select:hover { background-color: var(--hover); }
+option, optgroup { color: var(--ink); background: var(--raised); }
+option:checked { background: var(--chip); }
 .grow { flex: 1; min-width: 0; }
 .dim { color: var(--muted); }
 .small { font-size: 12px; }
@@ -145,7 +150,8 @@ svg .t-parked { fill: var(--parked); }
 #f-q { width: 220px; font: inherit; font-size: 13px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 7px; padding: 4px 10px; }
 .fsel { display: inline-flex; align-items: center; gap: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); font-size: 12.5px; overflow: hidden; }
 .fsel span { padding: 3px 4px 3px 9px; color: var(--muted); }
-.fsel select { font: inherit; color: var(--ink); background: transparent; border: 0; padding: 3px 6px 3px 2px; max-width: 220px; }
+.fsel select { font: inherit; color: var(--ink); border: 0; border-radius: 0 6px 6px 0; padding: 3px 24px 3px 2px; max-width: 220px; }
+.fsel select:focus-visible { outline-offset: -2px; }
 .fsel.set { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus) inset; }
 .fsel.set span { color: var(--ink-2); }
 
