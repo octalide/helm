@@ -10,8 +10,9 @@ export const DEFAULT_ITEM_TAGS: Record<string, readonly string[]> = {
   run: [],
   tag: [],
   work: ['phase', 'answered', 'leftovers', 'adopted'],
-  // the coordinator hears what needs it: work entering an attention phase, decisions, handovers and epics completing
-  fleet: [...ATTENTION, 'decision', 'answered', 'leftovers', 'adopted', 'returned', 'complete'],
+  // the coordinator hears what needs it: work entering an attention phase, decisions, handovers, epics completing and
+  // issues nobody owns
+  fleet: [...ATTENTION, 'decision', 'answered', 'leftovers', 'adopted', 'returned', 'complete', 'unowned'],
 };
 
 export type MatchContext = {
@@ -28,10 +29,17 @@ export function globMatch(glob: string, text: string): boolean {
   return re.test(text);
 }
 
+// of the forge's own events, the fleet hears only an issue nobody owns. an epic's routine phase changes reach it in its
+// epic event
+function fleetHears(e: HelmEvent): boolean {
+  if (e.kind === 'decision' || e.kind === 'epic') return true;
+  if (e.kind === 'issue') return e.tags.includes('unowned');
+  return e.kind === 'work' && !(e.epic && e.tags.includes('phase') && !e.tags.some((t) => ATTENTION.has(t)));
+}
+
 function inScope(e: HelmEvent, s: Subscription): boolean {
   const scope = s.scope;
-  // an epic's routine phase changes reach the fleet in its epic event
-  if (scope.kind === 'fleet') return e.kind === 'decision' || e.kind === 'epic' || (e.kind === 'work' && !(e.epic && e.tags.includes('phase') && !e.tags.some((t) => ATTENTION.has(t))));
+  if (scope.kind === 'fleet') return fleetHears(e);
   if (scope.kind === 'work') return (e.kind === 'work' || e.kind === 'decision') && e.owner === s.session;
   if (e.kind === 'work' || e.kind === 'decision' || e.kind === 'epic') return false;
   if (s.repo !== e.repo) return false;
