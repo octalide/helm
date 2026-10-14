@@ -131,7 +131,7 @@ const HISTORY_KEEP = 60;
 // a session gone this long is forgotten, with its subscriptions and letters
 const SESSION_KEEP_MS = 7 * 24 * 3600_000;
 // routing picks are kept this long
-export const PICK_KEEP_MS = 30 * 24 * 3600_000;
+const PICK_KEEP_MS = 30 * 24 * 3600_000;
 
 // what a session took over from the gone sessions it succeeds: their unfinished work in backlog order, their
 // subscriptions, and the open decisions now addressed to it
