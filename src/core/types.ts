@@ -192,6 +192,8 @@ export type Tier = {
   effort: Effort;
   // when an issue belongs on this tier, read by the routing judge
   when: string;
+  // false: caller-only, never shown to the routing judge and used only when a caller names it
+  judge?: boolean;
 };
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
