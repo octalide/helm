@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.1
+
+- An issue that an open pull request closes moves with that PR's phase while someone is on another work item it carries, and is no longer reported stalled for lacking an agent of its own. An epic's phase rolls up from its sub-issues and is never a stall of its own. A stopped report survives the issue's release, so it stays parked until it is dispatched again (#98).
+
 ## 0.7.0
 
 The ledger moves to version 4. helmd migrates it on start, and a 0.6.0 helmd does not read it after.
