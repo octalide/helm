@@ -2,9 +2,9 @@ import { type FSWatcher, watch } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isDone, verdictOf } from '../core/checks.ts';
-import { type Config, DEFAULT_CONFIG, mergeConfig, repoLayer } from '../core/config.ts';
+import { type Config, DEFAULT_CONFIG, mergeConfig, repoLayer, RESTART_FIELDS, sourcesOf } from '../core/config.ts';
 import { isRecord } from '../core/decision.ts';
-import type { AnswerBody, Answered, ClaimBody, ConfigView, DecisionBody, EscalateBody, IssueDetail, QueueBody, RegisterBody, ReportBody, StreamFrame, SubscribeBody } from '../core/protocol.ts';
+import type { AnswerBody, Answered, ClaimBody, ConfigView, DecisionBody, EscalateBody, IssueDetail, QueueBody, RegisterBody, ReportBody, SettingsBody, SettingsView, StreamFrame, SubscribeBody } from '../core/protocol.ts';
 import { PROTOCOL, workKey } from '../core/protocol.ts';
 import type { HelmPaths } from '../core/paths.ts';
 import type { AgentRecord, Decision, Fleet, ForgeState, HelmEvent, Letter, LetterPart, LocalState, Phase, PollStatus, Pull, RepoName, RepoView, Session, SessionRole, Subscription, TreeNode, Work, WorkView } from '../core/types.ts';
@@ -39,9 +39,20 @@ export type DaemonDeps = {
   onConfig?: (next: Config, prev: Config) => void;
 };
 
+const configFile = (paths: HelmPaths): string => join(paths.config, 'config.json');
+
+// a save refused: 400 for a layer the config rules reject, 409 for a base that is not the file as it stands
+export class SettingsRefused extends Error {
+  status: 400 | 409;
+  constructor(status: 400 | 409, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
 // the machine's config: the defaults under ~/.config/helm/config.json
 export async function readConfig(paths: HelmPaths): Promise<Config> {
-  const file = join(paths.config, 'config.json');
+  const file = configFile(paths);
   const raw = await readJson(file);
   try {
     return mergeConfig(DEFAULT_CONFIG, raw);
@@ -548,6 +559,7 @@ export class Daemon {
       ...(lite ? {} : { events: d.events.slice(-150) }),
       rates: { ...this.gh.rates },
       attention: [...ATTENTION] as Phase[],
+      picks: d.picks,
       at: this.now(),
     };
   }
@@ -951,6 +963,39 @@ export class Daemon {
       if (raw !== undefined) routing = mergeConfig(this.config, repoLayer(JSON.parse(raw))).routing;
     }
     return { routing, web: `http://127.0.0.1:${this.config.web.port}/` };
+  }
+
+  async settings(): Promise<SettingsView> {
+    const file = configFile(this.paths);
+    let layer: Record<string, unknown> | null = null;
+    let error: string | undefined;
+    try {
+      layer = (await readJson<Record<string, unknown>>(file)) ?? {};
+      mergeConfig(DEFAULT_CONFIG, layer);
+    } catch (e) {
+      error = (e as Error).message;
+    }
+    const plain = layer && typeof layer === 'object' && !Array.isArray(layer) ? layer : {};
+    return { file, layer, ...(error ? { error } : {}), config: this.config, defaults: DEFAULT_CONFIG, sources: sourcesOf(plain), restart: RESTART_FIELDS };
+  }
+
+  // the user layer checked by the rules a start applies, written whole and applied before this returns; a bad layer
+  // throws with the reason and leaves the file as it was
+  async saveSettings(b: SettingsBody): Promise<SettingsView> {
+    const file = configFile(this.paths);
+    const current = await readJson(file).then(
+      (v) => v ?? {},
+      () => null,
+    );
+    if (JSON.stringify(current) !== JSON.stringify(b.base)) throw new SettingsRefused(409, `${file} changed since the page read it; reload the settings and edit again`);
+    try {
+      mergeConfig(DEFAULT_CONFIG, b.layer);
+    } catch (e) {
+      throw new SettingsRefused(400, (e as Error).message);
+    }
+    await writeJson(file, b.layer, true);
+    await this.reloadConfig();
+    return this.settings();
   }
 
   async issue(repo: RepoName, n: number): Promise<IssueDetail> {
