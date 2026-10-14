@@ -48,6 +48,19 @@ describe('ledger', () => {
     expect(l.claim({ session: 'B', repo: 'o/r', issue: 1, force: true }, undefined).owner).toBe('B');
   });
 
+  it('logs each routing that starts an agent past a re-dispatch, and drops it after a month', () => {
+    const { l, tick } = ledger();
+    l.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    const routing = (tier: string) => ({ tier, model: 'm', effort: 'high' as const, by: 'judge' as const, at: T0 });
+    l.claim({ session: 'A', repo: 'o/r', issue: 1, routing: routing('deep') }, 'one');
+    l.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'x', routing: routing('deep') }, 'one');
+    l.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'y', routing: routing('light') }, 'one');
+    expect(l.data.picks.map((p) => [p.tier, p.agent])).toEqual([['deep', 'x'], ['light', 'y']]);
+    tick(31 * 24 * 3600_000);
+    l.sweep(Infinity);
+    expect(l.data.picks).toEqual([]);
+  });
+
   it('keeps the reported plan and each phase change once', () => {
     const { l, tick } = ledger();
     l.register({ id: 'A', cwd: '/', repo: 'o/r' });
