@@ -1,3 +1,4 @@
+import type { Config, Field } from './config.ts';
 import { compareVersions } from './repo.ts';
 import type { AgentRecord, CiFilter, Decision, DecisionKind, Effort, Letter, PlanStep, ReportState, RepoName, Routing, Scope, SessionRole, Tier, Until } from './types.ts';
 
@@ -79,6 +80,22 @@ export type EscalateBody = { by: string; note?: string };
 export type RoutingConfig = { judge: string; review: number; tiers: Tier[]; fallback: string };
 
 export type ConfigView = { routing: RoutingConfig; web?: string };
+
+// the machine's config as the settings page shows and edits it
+export type SettingsView = {
+  file: string;
+  // the user layer as the file holds it: {} when there is no file, null when the file is not json
+  layer: Record<string, unknown> | null;
+  // why helmd could not apply the file as it stands; config is then the one still running
+  error?: string;
+  config: Config;
+  defaults: Config;
+  sources: Record<Field, 'user' | 'default'>;
+  restart: readonly Field[];
+};
+
+// layer: the whole user layer to write. base: the layer as the page read it, so a save over a file changed since is refused
+export type SettingsBody = { layer: Record<string, unknown>; base: Record<string, unknown> | null };
 
 // what a session's stream carries, one json object a line
 export type StreamFrame =

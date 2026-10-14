@@ -1,9 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { extname, join } from 'node:path';
-import type { AnswerBody, ClaimBody, DecisionBody, EscalateBody, Health, HeartbeatBody, OrderBody, QueueBody, RegisterBody, ReleaseBody, ReportBody, RoleBody, StreamFrame, SubscribeBody } from '../core/protocol.ts';
+import type { AnswerBody, ClaimBody, DecisionBody, EscalateBody, Health, HeartbeatBody, OrderBody, QueueBody, RegisterBody, ReleaseBody, ReportBody, RoleBody, SettingsBody, StreamFrame, SubscribeBody } from '../core/protocol.ts';
 import { PROTOCOL } from '../core/protocol.ts';
-import type { Daemon } from './helmd.ts';
+import { type Daemon, SettingsRefused } from './helmd.ts';
 import { ClaimError } from './ledger.ts';
 
 type Ctx = { req: IncomingMessage; res: ServerResponse; params: Record<string, string>; query: URLSearchParams; body: () => Promise<unknown> };
@@ -57,6 +57,22 @@ export function routes(d: Daemon, stop: () => void): Route[] {
     }),
     compile('GET', '/v1/fleet', ({ query }) => d.fleet(query.get('lite') === '1'), true),
     compile('GET', '/v1/config', ({ query }) => d.configFor(query.get('repo') ?? undefined), true),
+    compile('GET', '/v1/settings', () => d.settings(), true),
+    compile(
+      'PUT',
+      '/v1/settings',
+      async ({ body }) => {
+        const b = (await body()) as SettingsBody;
+        need(b && typeof b.layer === 'object' && b.layer !== null && !Array.isArray(b.layer) && 'base' in b, 'layer and base are required');
+        try {
+          return await d.saveSettings(b);
+        } catch (e) {
+          if (e instanceof SettingsRefused) throw new HttpError(e.status, e.message);
+          throw e;
+        }
+      },
+      true,
+    ),
     compile('POST', '/v1/sessions', async ({ body }) => {
       const b = (await body()) as RegisterBody;
       need(b?.id && b.cwd, 'id and cwd are required');

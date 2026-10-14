@@ -28,7 +28,7 @@ export function routingPrompt(issue: IssueDetail, tiers: readonly Tier[], work?:
     'Underpowering costs a failed attempt and a rerun on a higher tier; overpowering costs money. Judge the work the issue asks for, not how it is written.',
     '',
     'Tiers, cheapest first:',
-    ...tiers.map((t, i) => `${i + 1}. ${t.name} (${t.model}, ${t.effort} effort): ${t.when}`),
+    ...judgeTiers(tiers).map((t, i) => `${i + 1}. ${t.name} (${t.model}, ${t.effort} effort): ${t.when}`),
     '',
     `Issue ${issue.repo}#${issue.number}: ${issue.title}`,
     `labels: ${issue.labels.join(', ') || 'none'}`,
@@ -42,9 +42,14 @@ export function routingPrompt(issue: IssueDetail, tiers: readonly Tier[], work?:
   ].join('\n');
 }
 
+// the tiers the judge may pick: a caller-only tier is used only when a caller names it
+export function judgeTiers(tiers: readonly Tier[]): Tier[] {
+  return tiers.filter((t) => t.judge !== false);
+}
+
 // the judge's answer as a routing; anything it got wrong falls back to the configured tier, at no confidence
 export function parseRouting(text: string, cfg: RoutingConfig, now: number): Routing {
-  // the config refuses a fallback that names no tier, so this always finds one
+  // the config refuses a fallback that names no tier or a caller-only one, so this always finds a tier the judge may pick
   const fallback = cfg.tiers.find((t) => t.name === cfg.fallback)!;
   const json = /\{[\s\S]*\}/.exec(text)?.[0];
   let raw: { tier?: unknown; confidence?: unknown; reason?: unknown } = {};
@@ -52,6 +57,7 @@ export function parseRouting(text: string, cfg: RoutingConfig, now: number): Rou
     raw = json ? (JSON.parse(json) as typeof raw) : {};
   } catch {}
   const tier = cfg.tiers.find((t) => t.name === raw.tier);
+  if (tier?.judge === false) return { ...asRouting(fallback, 'judge', now), confidence: 0, reason: `the judge picked ${tier.name}, which is caller-only; fell back to ${fallback.name}` };
   if (!tier) return { ...asRouting(fallback, 'judge', now), confidence: 0, reason: `the judge named no known tier (${clip(text.trim(), 120)}); fell back to ${fallback.name}` };
   const confidence = typeof raw.confidence === 'number' ? Math.min(1, Math.max(0, raw.confidence)) : 0;
   return { ...asRouting(tier, 'judge', now), confidence, reason: typeof raw.reason === 'string' ? clip(raw.reason, 300) : '' };

@@ -43,6 +43,7 @@ export function agents(main) {
                 { class: `arow2${LIVE.has(a.status) ? '' : ' quiet'}` },
                 agentDot({ agent: a.id, agentStatus: a.status }),
                 el('div', { class: 'grow' }, el('b', {}, a.name || a.description || a.id.slice(0, 8)), el('div', { class: 'dim small' }, typeText(a.type), a.description && a.name ? ` · ${a.description}` : '')),
+                w && w.routing ? tierChip(w.routing) : '',
                 w ? el('a', { class: 'awork', href: href('agents', '', { open: keyOf(w.repo, w.issue) }) }, phasePill(w.phase), ` ${repoShort(w.repo)}#${w.issue}`) : el('span', { class: 'dim small' }, 'no tracked work'),
               );
             }),
@@ -51,10 +52,43 @@ export function agents(main) {
     );
   });
 
+  const dispatched = recent(f);
+
   const past = gone.length
     ? el('details', { class: 'history' }, el('summary', {}, `Ended sessions (${gone.length})`), el('div', { class: 'list' }, gone.map((s) => el('div', { class: 'row' }, el('span', { class: `chip role-${s.role}` }, s.role), el('span', { class: 'grow' }, s.repo || s.title || s.id.slice(0, 8), el('span', { class: 'mono dim' }, ` ${s.id.slice(0, 8)}`)), el('span', { class: 'dim' }, `${plural(s.agents.length, 'agent')} · last seen `, at(s.seenAt, ' ago'))))))
     : '';
-  fill(main, tiles, ...(cards.length ? cards : [empty('No live sessions.', 'Every Claude Code session with helm enabled registers here.')]), past);
+  fill(main, tiles, ...(cards.length ? cards : [empty('No live sessions.', 'Every Claude Code session with helm enabled registers here.')]), dispatched, past);
+}
+
+const RECENT_MS = 7 * 24 * 3600_000;
+
+const tierChip = (r) => el('span', { class: 'chip tier', 'data-tip': `${r.model} at ${r.effort} effort, picked by ${r.by}` }, r.tier || model(r.model), el('small', {}, `${model(r.model)} / ${r.effort}`));
+
+// every agent dispatch started in the last week, live or ended, with the tier and model it ran on
+function recent(f) {
+  const status = new Map(f.sessions.flatMap((s) => s.agents.map((a) => [a.id, s.gone ? 'ended' : a.status])));
+  const now = Date.now();
+  const picks = (f.picks || []).filter((p) => now - p.at < RECENT_MS && (!filter('repo') || p.repo === filter('repo')) && (!filter('tier') || p.tier === filter('tier'))).reverse();
+  return section(
+    'Dispatches, last 7 days',
+    el('span', { class: 'count' }, picks.length || ''),
+    picks.length
+      ? el(
+          'div',
+          { class: 'list' },
+          picks.map((p) =>
+            el(
+              'div',
+              { class: 'row' },
+              p.agent ? agentDot({ agent: p.agent, agentStatus: status.get(p.agent) || 'ended' }) : '',
+              el('span', { class: 'grow' }, ext(issueUrl(p.repo, p.issue), `${repoShort(p.repo)}#${p.issue}`), p.agent ? el('span', { class: 'mono dim' }, ` ${p.agent.slice(0, 8)}`) : ''),
+              tierChip(p),
+              at(p.at),
+            ),
+          ),
+        )
+      : empty('No dispatches this week.'),
+  );
 }
 
 export function routing(main) {

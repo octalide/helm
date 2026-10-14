@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CONFIG } from '../src/core/config.ts';
+import { DEFAULT_CONFIG, mergeConfig, sourcesOf } from '../src/core/config.ts';
 import type { WorkView } from '../src/core/types.ts';
 import { parseScope } from '../src/core/scope.ts';
 import { parseRouting, routingPrompt } from '../src/mod/routing.ts';
@@ -17,9 +17,16 @@ describe('routing', () => {
     expect([r.tier, r.confidence]).toEqual(['standard', 0]);
   });
 
-  it('lists every tier and the issue in the prompt', () => {
+  it('refuses a caller-only tier from the judge and falls back', () => {
+    const r = parseRouting('{"tier": "frontier", "confidence": 0.9}', cfg, 0);
+    expect([r.tier, r.model, r.confidence]).toEqual(['standard', 'claude-opus-5-5', 0]);
+    expect(r.reason).toMatch(/frontier, which is caller-only/);
+  });
+
+  it('lists every tier the judge may pick and the issue in the prompt', () => {
     const p = routingPrompt({ repo: 'o/r', number: 3, title: 'bump', state: 'open', url: '', pr: false, author: 'a', labels: ['chore'], body: 'bump the version', comments: [] }, cfg.tiers);
-    for (const t of cfg.tiers) expect(p).toContain(`${t.name} (${t.model}, ${t.effort} effort)`);
+    for (const t of cfg.tiers) expect(p.includes(`${t.name} (${t.model}, ${t.effort} effort)`)).toBe(t.judge !== false);
+    expect(p).not.toContain('frontier');
     expect(p).toContain('Issue o/r#3: bump');
     expect(p).not.toContain('already done');
   });
@@ -39,6 +46,24 @@ describe('routing', () => {
     expect(p).toContain('plan, 1 of 2 steps done');
     expect(p).toContain('- [ ] mark ready');
     expect(p).toContain('Route on the work that is left');
+  });
+});
+
+describe('config', () => {
+  const tier = (name: string, more = {}) => ({ name, model: 'm', effort: 'high', when: 'w', ...more });
+
+  it('refuses a caller-only fallback, a twice-named tier and an out-of-range field', () => {
+    expect(() => mergeConfig(DEFAULT_CONFIG, { routing: { fallback: 'frontier' } })).toThrow(/caller-only/);
+    expect(() => mergeConfig(DEFAULT_CONFIG, { routing: { tiers: [tier('a'), tier('a')], fallback: 'a' } })).toThrow(/named twice/);
+    expect(() => mergeConfig(DEFAULT_CONFIG, { routing: { tiers: [tier('a', { judge: 'no' })], fallback: 'a' } })).toThrow(/judge must be true or false/);
+    expect(() => mergeConfig(DEFAULT_CONFIG, { web: { port: 70000 } })).toThrow(/web.port/);
+    expect(() => mergeConfig(DEFAULT_CONFIG, { poll: { idle: 0 } })).toThrow(/poll.idle/);
+    expect(() => mergeConfig(DEFAULT_CONFIG, { routing: { review: 2 } })).toThrow(/routing.review/);
+  });
+
+  it('names each field\'s source', () => {
+    const s = sourcesOf({ roots: [], poll: { idle: 5 }, routing: { tiers: [] } });
+    expect([s.roots, s.repos, s['poll.idle'], s['poll.active'], s['routing.tiers'], s['routing.judge']]).toEqual(['user', 'default', 'user', 'default', 'user', 'default']);
   });
 });
 

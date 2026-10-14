@@ -192,6 +192,8 @@ export type Tier = {
   effort: Effort;
   // when an issue belongs on this tier, read by the routing judge
   when: string;
+  // false: caller-only, never shown to the routing judge and used only when a caller names it
+  judge?: boolean;
 };
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -207,6 +209,9 @@ export type Routing = {
   reason?: string;
   at: number;
 };
+
+// one dispatch's routing as logged when its agent started, kept after the work's own routing moves on
+export type RoutingPick = Routing & { repo: RepoName; issue: number; agent?: string };
 
 // what an agent says about its own work: the states only it can know
 export type ReportState = 'working' | 'waiting' | 'blocked' | 'ready' | 'stopped' | 'abandoned';
@@ -442,5 +447,7 @@ export type Fleet = {
   rates: Record<string, { remaining: number; limit: number; resetAt: number }>;
   // the phases where work needs someone, for the page to mark without its own copy
   attention: Phase[];
+  // the routing picks the ledger keeps, oldest first
+  picks: RoutingPick[];
   at: number;
 };
