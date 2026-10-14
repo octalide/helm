@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.0
+
+The ledger moves to version 5. helmd migrates it on start, and a 0.7.x helmd does not read it after.
+
+- A Settings view in the web UI (key `s`) shows every config field, marked as set in your config file or default, and edits and saves `~/.config/helm/config.json` through helmd. An invalid edit is refused with the reason, a save over a file changed on disk since the page read it is refused, and every field applies live (#101).
+- A routing tier marked `"judge": false` is caller-only: the judge is never shown it and only a dispatch that names it runs on it. `frontier` is caller-only by default, and the fallback tier may not be caller-only (#101).
+- helm keeps every routing pick that started an agent for 30 days. The Settings view shows picks per tier over 24 hours and 7 days, and the Agents view shows each agent's tier and the last week's dispatches with their model (#101).
+
 ## 0.7.1
 
 - An issue that an open pull request closes moves with that PR's phase while someone is on another work item it carries, and is no longer reported stalled for lacking an agent of its own. An epic's phase rolls up from its sub-issues and is never a stall of its own. A stopped report survives the issue's release, so it stays parked until it is dispatched again (#98).
