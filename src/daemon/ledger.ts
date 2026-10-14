@@ -526,7 +526,8 @@ export class Ledger {
     else {
       delete w.owner;
       delete w.agent;
-      delete w.report;
+      // a stop holds until the issue is dispatched again
+      if (w.report?.state !== 'stopped') delete w.report;
     }
     w.updatedAt = now;
     this.changed();

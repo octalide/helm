@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { hasWorker } from '../src/core/work.ts';
-import { phaseOf, viewOf } from '../src/daemon/derive.ts';
+import { phaseOf, viewOf, viewsOf } from '../src/daemon/derive.ts';
 import { isOpen } from '../src/core/decision.ts';
-import type { Decision } from '../src/core/types.ts';
+import type { AgentStatus, Decision, ForgeState, Session, Work } from '../src/core/types.ts';
 import { ClaimError, emptyLedger, Ledger, LEDGER_VERSION, type LedgerData } from '../src/daemon/ledger.ts';
 import { check, forge, issue, pull, T0 } from './fixtures.ts';
 
@@ -59,6 +59,17 @@ describe('ledger', () => {
     l.phase('o/r', 1, 'working');
     l.phase('o/r', 1, 'ci');
     expect(l.data.work['o/r#1']!.history).toEqual([{ phase: 'working', at: T0 }, { phase: 'ci', at: T0 + 1000 }]);
+  });
+
+  it('keeps a stopped report through a release until the issue is dispatched again', () => {
+    const { l } = ledger();
+    l.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    l.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'x' }, 'one');
+    l.report({ session: 'A', agent: 'x', repo: 'o/r', issue: 1, state: 'stopped' });
+    const released = l.release('o/r', 1, 'A')!;
+    expect([released.owner, released.agent, released.report?.state]).toEqual([undefined, undefined, 'stopped']);
+    expect(viewOf(released, forge({ issues: [issue(1)], pulls: [pull(101, { draft: true })] }), undefined, new Map(), [], T0).phase).toBe('parked');
+    expect(l.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'y' }, 'one').report).toBeUndefined();
   });
 
   it('finishes work at the time it closed, once', () => {
@@ -307,6 +318,45 @@ describe('phase', () => {
     expect(phaseOf(a, { agent: 'gone', pull: p, blocking: true, issueClosed: false, setAside: true })).toBe('blocked');
     // a stopped report sets it aside whatever its agent is doing
     expect(['running', 'completed', 'gone'].map((agent) => phaseOf({ ...a, report: { state: 'stopped', at: T0 } }, { agent: agent as 'running', pull: p, blocking: false, issueClosed: false }))).toEqual(['parked', 'parked', 'parked']);
+  });
+
+  const session = (id: string, agents: Record<string, AgentStatus> = {}, gone = false): [string, Session] => [
+    id,
+    { id, role: 'repo', repo: 'o/r', cwd: '/', agents: Object.entries(agents).map(([a, status]) => ({ id: a, type: 't', description: '', status })), startedAt: T0, seenAt: T0, ...(gone ? { gone } : {}) },
+  ];
+  const phases = (work: Work[], f: ForgeState, sessions: [string, Session][]) => viewsOf(work, new Map([['o/r', f]]), new Map(), new Map(sessions), [], T0).map((v) => [v.issue, v.phase]);
+
+  it('moves an issue another live work item\'s open pr covers with that pr, and stalls both once nobody is on it', () => {
+    const f = forge({ issues: [issue(1), issue(2), issue(3)], pulls: [pull(103, { draft: true, closes: [1, 2, 3] })] });
+    const own = { ...w, issue: 3, owner: 'A', agent: 'x' };
+    const queued = { ...w, owner: 'A' };
+    // released from the backlog: no owner and no agent
+    const released = { ...w, issue: 2 };
+    expect(phases([queued, released, own], f, [session('A', { x: 'running' })])).toEqual([
+      [1, 'draft'],
+      [2, 'draft'],
+      [3, 'draft'],
+    ]);
+    expect(phases([queued, own], f, [session('A', { x: 'completed' })])).toEqual([
+      [1, 'stalled'],
+      [3, 'stalled'],
+    ]);
+  });
+
+  it('rolls an epic up from its sub-issues and never stalls it', () => {
+    const child = (n: number) => ({ repo: 'o/r', number: n, title: `issue ${n}`, url: '', state: 'open' as const });
+    const f = forge({ issues: [issue(10, { subIssues: { total: 2, done: 0 } }), issue(1), issue(2), issue(20, { subIssues: { total: 3, done: 3 } })], children: { 10: [child(1), child(2)] } });
+    // its session worked it itself and is gone, which stalls a leaf
+    const epic = { ...w, issue: 10, owner: 'A', report: { state: 'working' as const, at: T0 } };
+    const gone = session('A', {}, true);
+    expect(phases([epic, { ...w, owner: 'B', agent: 'y' }], f, [gone, session('B', { y: 'running' })])).toEqual([
+      [10, 'working'],
+      [1, 'working'],
+    ]);
+    expect(phases([epic], f, [gone])).toEqual([[10, 'queued']]);
+    // counted from the forge's summary when its sub-issues were not read
+    expect(phases([{ ...epic, issue: 20 }], f, [gone])).toEqual([[20, 'ready']]);
+    expect(phases([{ ...epic, issue: 1 }], f, [gone])).toEqual([[1, 'stalled']]);
   });
 
   it('finds the pr by closing reference or branch and the worktree by branch', () => {
