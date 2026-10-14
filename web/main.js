@@ -7,12 +7,14 @@ import { board } from './view-board.js';
 import { ci } from './view-ci.js';
 import { epics } from './view-epics.js';
 import { activity, inbox, repos, review } from './view-more.js';
+import { settings } from './view-settings.js';
 import { overview } from './view-overview.js';
 import { timeline } from './view-timeline.js';
 
 const open = (f) => f.work.filter((w) => w.phase !== 'done');
 
-// the views, in nav order; key is the digit that opens it, badge what the nav shows beside it
+// the views, in nav order; key is the digit that opens it, badge what the nav shows beside it, keeps that it holds its
+// own nodes across redraws (an answer or an edit in progress)
 const VIEWS = [
   { id: 'overview', label: 'Overview', key: '1', icon: 'grid', draw: overview },
   { id: 'board', label: 'Board', key: '2', icon: 'cols', draw: board, badge: (f) => open(f).filter((w) => w.phase !== 'queued' && w.phase !== 'parked').length },
@@ -21,10 +23,11 @@ const VIEWS = [
   { id: 'ci', label: 'CI', key: '5', icon: 'ci', draw: ci, badge: (f) => Object.values(f.repos).reduce((a, v) => a + (v.forge ? v.forge.runs.filter((r) => r.state === 'queued' || r.state === 'running').length : 0), 0), live: true },
   { id: 'agents', label: 'Agents', key: '6', icon: 'bot', draw: agents, badge: (f) => f.sessions.filter((s) => !s.gone).flatMap((s) => s.agents).filter((a) => ['running', 'pending', 'waiting'].includes(a.status)).length, live: true },
   { id: 'routing', label: 'Routing', key: '7', icon: 'route', draw: routing },
-  { id: 'inbox', label: 'Inbox', key: '8', icon: 'inbox', draw: (m) => inbox(m, load), badge: (f) => f.decisions.filter(forYou).length, alarm: (f) => f.decisions.some((d) => forYou(d) && d.blocking) },
-  { id: 'review', label: 'Review', key: 'r', icon: 'review', draw: (m) => review(m, load) },
+  { id: 'inbox', label: 'Inbox', key: '8', icon: 'inbox', keeps: true, draw: (m) => inbox(m, load), badge: (f) => f.decisions.filter(forYou).length, alarm: (f) => f.decisions.some((d) => forYou(d) && d.blocking) },
+  { id: 'review', label: 'Review', key: 'r', icon: 'review', keeps: true, draw: (m) => review(m, load) },
   { id: 'repos', label: 'Repos', key: '9', icon: 'repo', draw: repos },
   { id: 'activity', label: 'Activity', key: '0', icon: 'feed', draw: activity },
+  { id: 'settings', label: 'Settings', key: 's', icon: 'sliders', keeps: true, draw: settings },
 ];
 
 const ICONS = {
@@ -39,6 +42,7 @@ const ICONS = {
   review: 'M5 4h14v16H5zM8 9h8M8 13h8M8 17h5',
   repo: 'M6 3h12v18l-6-4-6 4z',
   feed: 'M4 6h16M4 12h16M4 18h10',
+  sliders: 'M4 6h16M4 12h16M4 18h16M9 4v4M15 10v4M7 16v4',
 };
 
 const icon = (name) => el('svg', { class: 'ico-svg', viewBox: '0 0 24 24', 'aria-hidden': 'true' }, el('path', { d: ICONS[name] }));
@@ -172,7 +176,7 @@ function render() {
   const v = VIEWS.find((x) => x.id === store.route.view) || VIEWS[0];
   $('view-title').textContent = v.label;
   const main = $('main');
-  if (v.id !== 'inbox' && v.id !== 'review') delete main.dataset.view;
+  if (!v.keeps) delete main.dataset.view;
   const y = window.scrollY;
   const scrollers = [...main.querySelectorAll('.board-wrap, .tl-chart')].map((n) => n.scrollLeft);
   v.draw(main);
