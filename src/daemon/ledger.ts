@@ -2,10 +2,10 @@ import type { ClaimBody, DecisionBody, QueueBody, RegisterBody, ReportBody, Subs
 import { isOpen } from '../core/decision.ts';
 import { workKey } from '../core/protocol.ts';
 import { inherited, selfWorked } from '../core/work.ts';
-import type { AdoptionRecord, AgentRecord, Answer, Audience, Decision, HelmEvent, Leftover, Letter, Phase, RepoName, Session, SessionRole, Subscription, Work } from '../core/types.ts';
+import type { AdoptionRecord, AgentRecord, Answer, Audience, Decision, HelmEvent, Leftover, Letter, Phase, RepoName, RoutingPick, Session, SessionRole, Subscription, Work } from '../core/types.ts';
 
 // bumped when the stored shape changes; an older file is migrated or refused, never read as this one
-export const LEDGER_VERSION = 4;
+export const LEDGER_VERSION = 5;
 
 // an issue that opened while helm watched its repository, held until a session owns it, it closes, or the fleet hears
 // that nobody owns it. alone: no live repo session was in its repository when it opened
@@ -22,6 +22,8 @@ export type LedgerData = {
   // the newest events, for the web page's activity feed
   events: HelmEvent[];
   unowned: Record<string, UnownedIssue>;
+  // every routing pick that started an agent, oldest first
+  picks: RoutingPick[];
 };
 
 // an older file brought up to this shape, in place
@@ -39,6 +41,14 @@ export function migrate(data: LedgerData): LedgerData {
   if (data.version === 3) {
     data.unowned = {};
     data.version = 4;
+  }
+  if (data.version === 4) {
+    // the picks still on record: each work item's latest
+    data.picks = Object.values(data.work)
+      .filter((w) => w.routing)
+      .map((w) => ({ ...w.routing!, repo: w.repo, issue: w.issue, ...(w.agent ? { agent: w.agent } : {}) }))
+      .sort((a, b) => a.at - b.at);
+    data.version = 5;
   }
   return data;
 }
@@ -108,6 +118,7 @@ export const emptyLedger = (): LedgerData => ({
   letters: {},
   events: [],
   unowned: {},
+  picks: [],
 });
 
 const EVENT_LOG = 300;
@@ -119,6 +130,8 @@ const WORK_KEEP_MS = 30 * 24 * 3600_000;
 const HISTORY_KEEP = 60;
 // a session gone this long is forgotten, with its subscriptions and letters
 const SESSION_KEEP_MS = 7 * 24 * 3600_000;
+// routing picks are kept this long
+export const PICK_KEEP_MS = 30 * 24 * 3600_000;
 
 // what a session took over from the gone sessions it succeeds: their unfinished work in backlog order, their
 // subscriptions, and the open decisions now addressed to it
@@ -313,6 +326,7 @@ export class Ledger {
       ...(b.agent ? { agent: b.agent, claimedAt: b.agent === base.agent ? (base.claimedAt ?? now) : now } : {}),
       ...(b.routing ? { routing: b.routing } : {}),
     };
+    if (b.routing && b.agent) this.data.picks.push({ ...b.routing, repo: b.repo, issue: b.issue, agent: b.agent });
     if (b.agent && b.agent !== base.agent) {
       // a new agent on stopped or adopted work takes up what the agent it replaces still waited on
       if (base.agent && base.owner && (base.report?.state === 'stopped' || inherited(base))) this.handOver(base.owner, base.agent, b.session, b.agent);
@@ -771,6 +785,11 @@ export class Ledger {
     for (const [k, d] of Object.entries(this.data.decisions)) if (d.state !== 'open' && now - d.updatedAt > DECISION_KEEP_MS) drop(this.data.decisions, k);
     // long past any sighting as newly opened, which could deliver it again
     for (const [k, u] of Object.entries(this.data.unowned)) if (u.delivered !== undefined && now - u.delivered > WORK_KEEP_MS) drop(this.data.unowned, k);
+    const fresh = this.data.picks.filter((p) => now - p.at <= PICK_KEEP_MS);
+    if (fresh.length !== this.data.picks.length) {
+      this.data.picks = fresh;
+      dropped = true;
+    }
     if (newlyGone.length || dropped) this.changed();
     return newlyGone;
   }
