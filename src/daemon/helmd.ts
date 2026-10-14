@@ -12,7 +12,7 @@ import { letterText } from '../core/letter.ts';
 import { route } from './deliver.ts';
 import { ATTENTION, buildTree } from '../core/tree.ts';
 import { hasWorker, selfWorked } from '../core/work.ts';
-import { pullFor, viewOf } from './derive.ts';
+import { pullFor, viewsOf } from './derive.ts';
 import { verdictEvent } from './events.ts';
 import { epicEvents, rootsOf } from './epics.ts';
 import type { GitHub } from './github.ts';
@@ -525,8 +525,8 @@ export class Daemon {
     const sessions = new Map(Object.entries(this.ledger.data.sessions));
     const decisions = Object.values(this.ledger.data.decisions);
     const subscriptions = Object.values(this.ledger.data.subscriptions);
-    return Object.values(this.ledger.data.work)
-      .map((w) => viewOf(w, this.pollers.get(w.repo)?.forge, this.local.get(w.repo), sessions, decisions, this.now(), subscriptions))
+    const forges = new Map([...this.pollers].flatMap(([repo, p]) => (p.forge ? [[repo, p.forge] as const] : [])));
+    return viewsOf(Object.values(this.ledger.data.work), forges, this.local, sessions, decisions, this.now(), subscriptions)
       .sort((a, b) => (a.owner ?? '').localeCompare(b.owner ?? '') || a.order - b.order);
   }
 
