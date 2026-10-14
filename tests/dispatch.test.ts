@@ -46,6 +46,20 @@ describe('dispatch', () => {
     expect(decision.blocking).toBe(false);
   });
 
+  it('never lands on a caller-only tier unless the caller names it', async () => {
+    const port = (spawned: string[]): DispatchPort => ({
+      now: () => 0,
+      agentType: async (model, effort) => `${model}-${effort}`,
+      complete: async () => ({ text: '{"tier": "frontier", "confidence": 0.95, "reason": "hard"}' }),
+      spawn: async (a) => (spawned.push(a.subagentType), { agentId: 'A1' }),
+    });
+    const judged: string[] = [];
+    expect(await dispatchIssues(env({ 5: { state: 'open' } }).e, port(judged), { issues: [5] })).toMatch(/^o\/r#5 → standard claude-opus-5-5\/medium/);
+    const named: string[] = [];
+    expect(await dispatchIssues(env({ 5: { state: 'open' } }).e, port(named), { issues: [5], tier: 'frontier' })).toMatch(/^o\/r#5 → frontier claude-fable-5-1\/high/);
+    expect([judged, named]).toEqual([['claude-opus-5-5-medium'], ['claude-fable-5-1-high']]);
+  });
+
   it('skips closed issues and pull requests, and keeps going past a failure', async () => {
     const { e } = env({ 1: { state: 'closed' }, 2: { state: 'open', pr: true }, 3: { state: 'open' } });
     const port: DispatchPort = { now: () => 0, agentType: async () => 't', complete: async () => ({ failed: 'api-error' }), spawn: async () => ({ deny: 'no room' }) };

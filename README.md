@@ -113,9 +113,9 @@ The default tiers:
 | light | claude-sonnet-5-5 | medium | small contained work in one module with a stated design |
 | standard | claude-opus-5-5 | medium | ordinary work in one subsystem with clear acceptance |
 | deep | claude-opus-5-5 | high | cross-subsystem or contract changes, codegen, concurrency, soundness, design-heavy work, unknown root causes |
-| frontier | claude-fable-5-1 | high | reserved for decision-heavy work: architecture, contract or language design, research-grade problems, what earlier tiers failed on. Never an implementation workhorse |
+| frontier | claude-fable-5-1 | high | reserved for decision-heavy work: architecture, contract or language design, research-grade problems, what earlier tiers failed on. Never an implementation workhorse. Caller-only |
 
-A judge answer that names no tier falls back to `routing.fallback`, `standard` by default.
+A tier with `"judge": false` is **caller-only**: the judge is never shown it, and only a `dispatch` that names it runs on it. `frontier` is caller-only by default, so a dispatch with no tier never lands on it. A judge answer that names no tier, or names a caller-only one, falls back to `routing.fallback`, `standard` by default. The fallback can't be caller-only.
 
 ## Web page
 
@@ -128,14 +128,15 @@ A judge answer that names no tier falls back to `routing.fallback`, `standard` b
 | Epics | the sub-issue tree across repositories, each epic with its rollup bar, each leaf with its phase, plan and agent; drill into any epic |
 | Timeline | a lane per work item of the phases it went through over 6 hours to 30 days, and the median time work spends in each phase |
 | CI | runs in flight with every job and step, pass rate and run length, each workflow's recent outcomes, and failed runs with their logs |
-| Agents | each live session's agents, their model and effort, and the work each is on |
+| Agents | each live session's agents, their model and effort, and the work and tier each is on; below, every dispatch of the last 7 days with its tier and model, live or ended |
 | Routing | picks per tier by outcome, the judge's confidence, and every pick with its reason |
 | Inbox | what is yours to decide, each card marked for you: questions sessions hand on or ask themselves, stalls and failures nobody else owns, answered or dismissed in place. Below, muted and never counted, what sessions are handling, each naming its session, so you can read it or step in |
 | Review | records of what was decided without you, newest first: choices agents and sessions made, which take feedback or are marked reviewed, and routing picks, which can still be rerouted |
 | Repos | each repository's PRs, issues, runs, worktrees and branches, and the GitHub budget left |
 | Activity | every event by day, by kind |
+| Settings | the config, every field marked as set in your file or helm's default, editable and saved to `~/.config/helm/config.json`; and the routing picks per tier over the last day and week |
 
-Clicking a work item opens its detail: its phases with how long each took, its plan, CI, routing, decisions and worktree. Filters for repository, session, epic and tier, plus a search, apply to every view and live in the URL, so a filtered view can be bookmarked. `ctrl k` opens a palette that jumps to any view, issue, epic, repository or session. The digits open the views and `r` opens Review, `/` searches, `j` and `k` walk the cards, `t` toggles the theme, and `?` lists the keys.
+Clicking a work item opens its detail: its phases with how long each took, its plan, CI, routing, decisions and worktree. Filters for repository, session, epic and tier, plus a search, apply to every view and live in the URL, so a filtered view can be bookmarked. `ctrl k` opens a palette that jumps to any view, issue, epic, repository or session. The digits open the views, `r` opens Review and `s` Settings, `/` searches, `j` and `k` walk the cards, `t` toggles the theme, and `?` lists the keys.
 
 The page is served on 127.0.0.1 only. A request must name this server as its Host, and a write must come from this page.
 
@@ -155,7 +156,11 @@ The page is served on 127.0.0.1 only. A request must name this server as its Hos
 
 `roots` are searched for checkouts by their `origin` remote. `repos` are polled whether or not anything references them. `routing.tiers` replaces the table whole, and `routing.fallback` must name one of its tiers. A repository can set its own `routing` in `.helm/config.json`.
 
+A tier is `{ "name", "model", "effort", "when" }`, plus `"judge": false` to make it caller-only (see Routing). Tier names are unique.
+
 helmd watches the file and applies an edit live, with no restart. An edit that fails to parse or check is logged to the daemon log and the running config kept.
+
+The **Settings** view on the web page edits this file. It shows the config helmd is running, with each field marked `user` when your file sets it and `default` when it doesn't. You can edit every field, add, remove and reorder tiers, change each tier's model, effort, `when` and whether the judge may pick it, and reset a field to drop it from your file. Saving checks the whole file by the rules helmd applies at start. A bad edit is refused with the reason and the file is left as it was. A good one is written whole and applied before the page shows it, and no field needs a restart. A save is also refused when the file changed on disk after the page read it. The page edits only the machine's file, not a repository's `.helm/config.json`.
 
 State lives under `$XDG_STATE_HOME/helm` and the socket under `$XDG_RUNTIME_DIR/helm`. `HELM_HOME` puts everything under one directory, which is how a second daemon runs beside the real one.
 

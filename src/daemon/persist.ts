@@ -11,10 +11,11 @@ export async function readJson<T>(path: string): Promise<T | undefined> {
 }
 
 // written beside the target and renamed over it, so a crash mid-write never leaves half a file
-export async function writeJson(path: string, value: unknown): Promise<void> {
+// pretty: indented, for a file people also edit by hand
+export async function writeJson(path: string, value: unknown, pretty = false): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const tmp = `${path}.${process.pid}.tmp`;
-  await writeFile(tmp, JSON.stringify(value));
+  await writeFile(tmp, pretty ? `${JSON.stringify(value, null, 2)}\n` : JSON.stringify(value));
   await rename(tmp, path);
 }
 

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -344,6 +344,22 @@ describe('daemon', () => {
     await d.reloadConfig();
     expect((await d.configFor()).routing.fallback).toBe('deep');
     expect(log.at(-1)).toMatch(/keeping the running one: .*names no tier/);
+    await d.stop();
+  });
+
+  it('saves settings checked and applied, and refuses a bad or stale one leaving the file as it was', async () => {
+    const { d, paths } = await daemon();
+    const file = join(paths.config, 'config.json');
+    const first = await d.settings();
+    expect([first.layer, first.sources['routing.fallback'], first.restart]).toEqual([{}, 'default', []]);
+    const saved = await d.saveSettings({ layer: { routing: { fallback: 'deep' }, poll: { idle: 60 } }, base: {} });
+    expect([saved.config.routing.fallback, saved.config.poll.idle, saved.sources['routing.fallback'], saved.sources['poll.active']]).toEqual(['deep', 60, 'user', 'default']);
+    expect(d.config.routing.fallback).toBe('deep');
+    const disk = await readFile(file, 'utf8');
+    expect(JSON.parse(disk)).toEqual({ routing: { fallback: 'deep' }, poll: { idle: 60 } });
+    await expect(d.saveSettings({ layer: { routing: { fallback: 'frontier' } }, base: saved.layer })).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/caller-only/) });
+    await expect(d.saveSettings({ layer: {}, base: {} })).rejects.toMatchObject({ status: 409 });
+    expect(await readFile(file, 'utf8')).toBe(disk);
     await d.stop();
   });
 
