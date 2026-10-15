@@ -54,6 +54,7 @@ describe('config and logs', () => {
       14: [undefined, 'not mine'],
       15: ['/r/.claude/worktrees/fix/61', ''],
       16: ['/r/.claude/worktrees/fix/61', 'helmd'],
+      17: ['/r/.claude/worktrees/fix/61', 'node /h/helm/0.7.1/src/daemon/main.ts stream dd2ddcbb-dd5f-4880-9c1e-1d7d17253803'],
     });
     expect(await leftovers('/r/.claude/worktrees/fix/61/', procs, 16)).toEqual([
       { pid: 10, command: 'bash -c until [ -s out.log ]; do :; done' },

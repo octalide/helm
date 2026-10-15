@@ -24,6 +24,9 @@ export function inside(dir: string, path: string): boolean {
   return path === root || path.startsWith(`${root}/`);
 }
 
+// helm's own session stream (`main.ts stream <session>`): it belongs to the session, never to an agent
+const STREAM = /\/daemon\/main\.ts stream \S+$/;
+
 // live processes whose working directory is inside a directory, never this process itself
 export async function leftovers(dir: string, table: ProcTable = procfs(), self = process.pid): Promise<Leftover[]> {
   const out: Leftover[] = [];
@@ -33,7 +36,7 @@ export async function leftovers(dir: string, table: ProcTable = procfs(), self =
     if (cwd === undefined || !inside(dir, cwd)) continue;
     const command = await table.command(pid);
     // a zombie has an empty cmdline: nothing left running
-    if (command) out.push({ pid, command });
+    if (command && !STREAM.test(command)) out.push({ pid, command });
   }
   return out.sort((a, b) => a.pid - b.pid);
 }
