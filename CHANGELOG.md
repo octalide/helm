@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.1
+
+- A session's own helm stream process is no longer reported as an ended agent's leftover when it happens to run in that agent's worktree (#104).
+
 ## 0.8.0
 
 The ledger moves to version 5. helmd migrates it on start, and a 0.7.x helmd does not read it after.
