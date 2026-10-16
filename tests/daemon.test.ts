@@ -482,7 +482,7 @@ describe('daemon', () => {
     issues.push(...[7, 8].map((n) => issue(n, { createdAt: iso(now - 30_000), updatedAt: iso(now - 30_000) })));
     d.queue({ session: 'C', repo: 'o/r', issues: [8] });
     await d.pollRepo('o/r');
-    expect(lettersFor(d, 'C').flatMap((l) => l.text.split('\n')).filter((l) => l.includes('unowned') || l.includes('live session'))).toEqual(['issue #7 opened with no live session in o/r: issue 7']);
+    expect(lettersFor(d, 'C').flatMap((l) => l.text.split('\n')).filter((l) => l.includes('unowned') || l.includes('repo session'))).toEqual(['issue #7 opened with no live repo session in o/r: issue 7']);
     await d.stop();
   });
 });

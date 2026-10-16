@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { Decision, Fleet, Run, Session, TreeNode, WorkView } from '../src/core/types.ts';
 import { bandRow, bar, paneRows, type PaneOpts, type Row, statusText } from '../src/mod/view.ts';
+import { fleetBlock } from '../src/mod/format.ts';
 import { T0 } from './fixtures.ts';
 
 const session = (id: string, over: Partial<Session> = {}): Session => ({ id, role: 'repo', cwd: '/', agents: [], startedAt: T0, seenAt: T0, ...over });
 const work = (issue: number, phase: WorkView['phase'], owner = 'S', over: Partial<WorkView> = {}): WorkView => ({ repo: 'o/r', issue, title: `t${issue}`, owner, order: issue, queuedAt: T0, updatedAt: T0, phase, verdict: 'none', checks: [], jobs: [], decisions: 0, ...over });
 const decision = (id: string, blocking: boolean, issue: number, over: Partial<Decision> = {}): Decision => ({ id, kind: blocking ? 'question' : 'routing', repo: 'o/r', issue, title: `q${id}`, body: '', blocking, ...(blocking ? { to: 'session' as const, session: 'S' } : { to: 'person' as const }), state: 'open', createdAt: T0, updatedAt: T0, ...over });
-const fleet = (over: Partial<Fleet>): Fleet => ({ version: '0', sessions: [session('S', { repo: 'o/r' }), session('B')], work: [], decisions: [], subscriptions: [], repos: {}, tree: [], rates: {}, attention: [], picks: [], at: T0, ...over });
+const fleet = (over: Partial<Fleet>): Fleet => ({ version: '0', sessions: [session('S', { repo: 'o/r' }), session('B')], unattended: [], work: [], decisions: [], subscriptions: [], repos: {}, tree: [], rates: {}, attention: [], picks: [], at: T0, ...over });
 const text = (rows: Row[]) => rows.map((r) => r.map((s) => s.text).join(''));
 const opts = (over: Partial<PaneOpts> = {}): PaneOpts => ({ rows: 60, cols: 80, tab: 'work', ...over });
 const self = { session: 'S', role: 'repo' as const, repo: 'o/r' };
@@ -45,6 +46,10 @@ describe('pane', () => {
   it('groups the fleet by session for a coordinator', () => {
     const f = fleet({ sessions: [session('C', { role: 'coordinator' }), session('S', { repo: 'o/r' })], work: [work(1, 'working')] });
     expect(text(paneRows(f, { session: 'C', role: 'coordinator' }, opts()))).toContain('r repo · 0 agents running');
+    const none = fleet({ sessions: [session('C', { role: 'coordinator' })], unattended: [{ repo: 'o/m', open: 2, last: { session: 'M', seenAt: T0 - 7200_000 } }] });
+    const line = 'o/m: no live repo session · 2 open work items · last M, seen 2h ago';
+    expect(text(paneRows(none, { session: 'C', role: 'coordinator' }, opts()))).toContain(line);
+    expect(fleetBlock(none, 'C').split('\n')).toContain(line);
   });
 
   it('shows epics touching the session with their rollup and what moves under them', () => {

@@ -551,6 +551,7 @@ export class Daemon {
     return {
       version: this.version,
       sessions: Object.values(d.sessions).sort((a, b) => b.seenAt - a.seenAt),
+      unattended: this.ledger.unattended(),
       // a pane has no use for work finished before today
       work: lite ? work.filter((w) => !w.finished || this.now() - w.finished.at < LITE_DONE_MS) : work,
       tree: this.tree(work),

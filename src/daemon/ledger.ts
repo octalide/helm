@@ -2,7 +2,7 @@ import type { ClaimBody, DecisionBody, QueueBody, RegisterBody, ReportBody, Subs
 import { isOpen } from '../core/decision.ts';
 import { workKey } from '../core/protocol.ts';
 import { inherited, selfWorked } from '../core/work.ts';
-import type { AdoptionRecord, AgentRecord, Answer, Audience, Decision, HelmEvent, Leftover, Letter, Phase, RepoName, RoutingPick, Session, SessionRole, Subscription, Work } from '../core/types.ts';
+import type { AdoptionRecord, AgentRecord, Answer, Audience, Decision, HelmEvent, Leftover, Letter, Phase, RepoName, RoutingPick, Session, SessionRole, Subscription, Unattended, Work } from '../core/types.ts';
 
 // bumped when the stored shape changes; an older file is migrated or refused, never read as this one
 export const LEDGER_VERSION = 6;
@@ -765,6 +765,21 @@ export class Ledger {
     if (delivered) u.delivered = this.now();
     else delete this.data.unowned[key];
     this.changed();
+  }
+
+  // the repositories with unfinished work, or that had a repo session, where no repo session is live
+  unattended(): Unattended[] {
+    const sessions = Object.values(this.data.sessions);
+    const live = new Set(sessions.filter((s) => !s.gone && s.role === 'repo' && s.repo).map((s) => s.repo!));
+    const out = new Map<RepoName, Unattended>();
+    const of = (repo: RepoName) => out.get(repo) ?? out.set(repo, { repo, open: 0 }).get(repo)!;
+    for (const s of sessions) {
+      if (s.role !== 'repo' || !s.repo || live.has(s.repo)) continue;
+      const u = of(s.repo);
+      if (!u.last || s.seenAt > u.last.seenAt) u.last = { session: s.id, seenAt: s.seenAt };
+    }
+    for (const w of Object.values(this.data.work)) if (!w.finished && !live.has(w.repo)) of(w.repo).open++;
+    return [...out.values()].sort((a, b) => a.repo.localeCompare(b.repo));
   }
 
   live(session: string): boolean {
