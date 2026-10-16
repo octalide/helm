@@ -689,7 +689,7 @@ export class Daemon {
     }
   }
 
-  // what an ended agent left running in its work's worktree goes on the work item, and to its owner when there is any
+  // what an ended agent left running in its work's worktree goes on the work item, and to its owner while that session lives, else to the coordinator
   async agentEnded(session: string, agent: string): Promise<void> {
     for (const v of this.workViews()) {
       if (v.owner !== session || v.agent !== agent || v.finished || !v.worktree || v.worktree.main) continue;
@@ -711,7 +711,7 @@ export class Daemon {
           text: `${key} agent ${agent} ended and left ${found.length} process${found.length === 1 ? '' : 'es'} running in ${v.worktree.path}: ${v.title}`,
           detail: [...found.map((p) => `pid ${p.pid}: ${p.command.slice(0, 200)}`), 'helm kills nothing: whoever owns the work decides'],
           ...(v.pull ? { url: v.pull.url } : v.issueUrl ? { url: v.issueUrl } : {}),
-          owner: session,
+          ...(this.ledger.live(session) ? { owner: session } : {}),
         },
       ]);
     }
