@@ -5,7 +5,7 @@ import { inherited, selfWorked } from '../core/work.ts';
 import type { AdoptionRecord, AgentRecord, Answer, Audience, Decision, HelmEvent, Leftover, Letter, Phase, RepoName, RoutingPick, Session, SessionRole, Subscription, Work } from '../core/types.ts';
 
 // bumped when the stored shape changes; an older file is migrated or refused, never read as this one
-export const LEDGER_VERSION = 5;
+export const LEDGER_VERSION = 6;
 
 // an issue that opened while helm watched its repository, held until a session owns it, it closes, or the fleet hears
 // that nobody owns it. alone: no live repo session was in its repository when it opened
@@ -49,6 +49,12 @@ export function migrate(data: LedgerData): LedgerData {
       .map((w) => ({ ...w.routing!, repo: w.repo, issue: w.issue, ...(w.agent ? { agent: w.agent } : {}) }))
       .sort((a, b) => a.at - b.at);
     data.version = 5;
+  }
+  if (data.version === 5) {
+    // version 5 kept every stored role, a default as firmly as one asked for. a default never made a coordinator, nor an
+    // other session with a repository, so those were asked for
+    for (const s of Object.values(data.sessions)) if (s.role === 'coordinator' || (s.role === 'other' && s.repo)) s.asked = true;
+    data.version = 6;
   }
   return data;
 }
@@ -163,8 +169,10 @@ export class Ledger {
     this.changed = changed;
   }
 
-  // a role asked for wins; otherwise a known session keeps its own, and a new one goes on with the role of the session
-  // it goes on from, or defaults by its checkout. a role from a mod before protocol 3 is its guess, a default only
+  // a role asked for wins; otherwise a known session keeps the role it asked for, and a new one the role the session it
+  // goes on from asked for. any other role is a default, worked out again on every register by the checkout, so a
+  // session that registered once outside one is the repo session of the checkout it comes back in. a role from a mod
+  // before protocol 3 is its guess, a default only
   register(b: RegisterBody): Session {
     const now = this.now();
     const was = this.data.sessions[b.id];
@@ -172,10 +180,12 @@ export class Ledger {
     const asked = (b.protocol ?? 0) >= 3 ? b.role : undefined;
     const guess = (b.protocol ?? 0) >= 3 ? undefined : b.role;
     const repo = was ? (was.repo ?? b.repo) : (prev?.repo ?? b.repo);
-    const role: SessionRole = asked ?? was?.role ?? prev?.role ?? guess ?? (repo ? 'repo' : 'other');
+    const kept = was ? (was.asked ? was.role : undefined) : prev?.asked ? prev.role : undefined;
+    const role: SessionRole = asked ?? kept ?? guess ?? (repo ? 'repo' : 'other');
     const s: Session = {
       id: b.id,
       role,
+      ...(asked ?? kept ? { asked: true } : {}),
       cwd: b.cwd,
       agents: was?.agents ?? [],
       startedAt: was?.startedAt ?? now,
@@ -205,6 +215,7 @@ export class Ledger {
     const s = this.data.sessions[id];
     if (!s) return undefined;
     s.role = role;
+    s.asked = true;
     if (repo) s.repo = repo;
     this.roleSubscription(s);
     this.changed();

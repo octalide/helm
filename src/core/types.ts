@@ -163,6 +163,8 @@ export type AgentRecord = {
 export type Session = {
   id: string;
   role: SessionRole;
+  // the role was asked for, at launch or with /helm role, and is kept; without it the role is a default
+  asked?: boolean;
   repo?: RepoName;
   cwd: string;
   title?: string;
