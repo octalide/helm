@@ -6,7 +6,7 @@
   "license": "MIT",
   "private": true,
   "helm": {
-    "protocol": 3
+    "protocol": 4
   },
   "engines": {
     "node": ">=24"
