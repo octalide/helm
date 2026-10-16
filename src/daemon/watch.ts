@@ -10,7 +10,7 @@ export const DEFAULT_ITEM_TAGS: Record<string, readonly string[]> = {
   run: [],
   tag: [],
   work: ['phase', 'answered', 'leftovers', 'adopted'],
-  // the coordinator hears what needs it: its own or unowned work entering an attention phase, decisions, handovers,
+  // the coordinator hears what needs it: its own or unowned work entering an attention phase or leaving processes, decisions, handovers,
   // epics completing and issues nobody owns
   fleet: [...ATTENTION, 'decision', 'answered', 'leftovers', 'adopted', 'returned', 'complete', 'unowned'],
 };
@@ -30,14 +30,15 @@ export function globMatch(glob: string, text: string): boolean {
 }
 
 // of the forge's own events, the fleet hears only an issue nobody owns. an epic's routine phase changes reach it in its
-// epic event. a work item's phases are its owner's to hear, so by default the fleet hears only those of work its own
+// epic event. a work item's phases and leftovers are its owner's to hear, so by default the fleet hears only those of work its own
 // session owns or nobody owns: what another session's work needs from the person reaches it as a decision
 function fleetHears(e: HelmEvent, s: Subscription): boolean {
   if (e.kind === 'decision' || e.kind === 'epic') return true;
   if (e.kind === 'issue') return e.tags.includes('unowned');
   if (e.kind !== 'work') return false;
-  if (!e.tags.includes('phase')) return true;
-  if (e.epic && !e.tags.some((t) => ATTENTION.has(t))) return false;
+  const phase = e.tags.includes('phase');
+  if (!phase && !e.tags.includes('leftovers')) return true;
+  if (phase && e.epic && !e.tags.some((t) => ATTENTION.has(t))) return false;
   return s.tags !== undefined || e.owner === undefined || e.owner === s.session;
 }
 

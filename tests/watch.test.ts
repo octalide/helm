@@ -22,6 +22,10 @@ describe('matches', () => {
     expect(matches(owned('A'), s, ctx)).toBe(false);
     expect(matches(owned('A'), sub({ scope: { kind: 'work' }, session: 'A' }), ctx)).toBe(true);
     expect(matches(owned('S'), s, ctx)).toBe(true);
+    const left = (owner?: string) => ev({ kind: 'work', issue: 2, tags: ['leftovers'], ...(owner ? { owner } : {}) });
+    expect(matches(left('A'), s, ctx)).toBe(false);
+    expect(matches(left('A'), sub({ scope: { kind: 'work' }, session: 'A' }), ctx)).toBe(true);
+    expect(matches(left('S'), s, ctx)).toBe(true);
     expect(matches(ev({ kind: 'epic', issue: 1, tags: ['progress'] }), s, ctx)).toBe(false);
     expect(matches(ev({ kind: 'epic', issue: 1, tags: ['progress', 'complete'] }), s, ctx)).toBe(true);
     expect(matches(ev({ kind: 'decision', tags: ['decision', 'question'] }), s, ctx)).toBe(true);
