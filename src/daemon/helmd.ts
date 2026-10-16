@@ -264,7 +264,8 @@ export class Daemon {
     try {
       const p = await this.poller(repo);
       const tracked = Object.values(this.ledger.data.work).filter((w) => w.repo === repo && !w.finished).map((w) => w.issue);
-      const { changed, events } = await p.poll(this.now(), force, tracked);
+      const { changed, events, gone } = await p.poll(this.now(), force, tracked);
+      for (const [n, how] of Object.entries(gone)) this.ledger.finish(repo, Number(n), how);
       this.savers.get(repo)?.save();
       st.failures = 0;
       delete st.error;

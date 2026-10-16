@@ -581,7 +581,7 @@ export class Ledger {
   }
 
   // at is when it finished, when that was before now: a close helm learns of late
-  finish(repo: string, issue: number, how: 'merged' | 'closed', at = this.now()): Work | undefined {
+  finish(repo: string, issue: number, how: 'merged' | 'closed' | 'gone' | 'pull', at = this.now()): Work | undefined {
     const w = this.data.work[workKey(repo, issue)];
     if (!w || w.finished) return undefined;
     w.finished = { at: Math.min(at, this.now()), how };

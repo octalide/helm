@@ -65,11 +65,12 @@ export class GitHub {
     return (await this.request(path, {})).text();
   }
 
-  // partial takes what resolved despite errors, a field that did not coming back null
+  // partial takes what resolved despite not-found errors, the field that did not resolve coming back null. any other
+  // error fails the read, since a null it caused says nothing about the field
   async graphql<T>(query: string, variables: Record<string, unknown>, opts: { partial?: boolean } = {}): Promise<T> {
     const res = await this.request('graphql', { 'content-type': 'application/json' }, { method: 'POST', body: JSON.stringify({ query, variables }) });
-    const out = (await res.json()) as { data?: T; errors?: { message: string }[] };
-    if (out.errors?.length && !(opts.partial && out.data)) throw new GitHubError(`graphql: ${out.errors.map((e) => e.message).join('; ')}`, 200);
+    const out = (await res.json()) as { data?: T; errors?: { message: string; type?: string }[] };
+    if (out.errors?.length && !(opts.partial && out.data && out.errors.every((e) => e.type === 'NOT_FOUND'))) throw new GitHubError(`graphql: ${out.errors.map((e) => e.message).join('; ')}`, 200);
     if (!out.data) throw new GitHubError('graphql answered no data', 200);
     return out.data;
   }
