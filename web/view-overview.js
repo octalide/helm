@@ -148,7 +148,8 @@ function throughputPanel(per) {
 
 function sessionsStrip(open) {
   const live = store.fleet.sessions.filter((s) => !s.gone);
-  if (!live.length) return '';
+  const unattended = store.fleet.unattended ?? [];
+  if (!live.length && !unattended.length) return '';
   return section(
     'Sessions',
     el('a', { class: 'more', href: href('agents') }, 'agents →'),
@@ -171,6 +172,14 @@ function sessionsStrip(open) {
           running.length ? el('div', { class: 'agents-mini' }, running.slice(0, 4).map((a) => el('span', { class: 'agent live', 'data-tip': `${a.type}\n${a.description}` }, a.name || a.description.slice(0, 28)))) : '',
         );
       }),
+      unattended.map((u) =>
+        el(
+          'a',
+          { class: 'scard', href: href('repos', '', { repo: u.repo }), 'data-tip': 'start or resume a session in its checkout, or run /helm role repo in one' },
+          el('div', { class: 'scard-head' }, el('span', { class: 'chip bad' }, 'no repo session'), el('b', {}, repoShort(u.repo))),
+          el('div', { class: 'dim small' }, plural(u.open, 'open item'), u.last ? [' · last seen ', at(u.last.seenAt, ' ago')] : ''),
+        ),
+      ),
     ),
   );
 }

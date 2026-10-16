@@ -163,6 +163,8 @@ export type AgentRecord = {
 export type Session = {
   id: string;
   role: SessionRole;
+  // the role was asked for, at launch or with /helm role, and is kept; without it the role is a default
+  asked?: boolean;
   repo?: RepoName;
   cwd: string;
   title?: string;
@@ -242,7 +244,7 @@ export type Work = {
   queuedAt: number;
   claimedAt?: number;
   updatedAt: number;
-  finished?: { at: number; how: 'merged' | 'closed' | 'abandoned' };
+  finished?: { at: number; how: 'merged' | 'closed' | 'abandoned' | 'gone' | 'pull' };
   // taken over from a gone session; agent is the one it had then, gone with that session and so never resumed
   adopted?: { from: string; at: number; agent?: string };
 };
@@ -433,9 +435,14 @@ export type PollStatus = {
   failures: number;
 };
 
+// a repository with unfinished work, or that had a repo session, where no repo session is live: nobody dispatches its
+// work, and each issue opened in it reaches the coordinator at once. last is its repo session seen most recently
+export type Unattended = { repo: RepoName; open: number; last?: { session: string; seenAt: number } };
+
 export type Fleet = {
   version: string;
   sessions: Session[];
+  unattended: Unattended[];
   work: WorkView[];
   decisions: Decision[];
   subscriptions: Subscription[];

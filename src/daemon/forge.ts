@@ -2,14 +2,22 @@ import type { Author, Check, CheckState, Child, Issue, Job, Note, Pull, Run, Ste
 
 const NOTE = 'author{login __typename} createdAt url bodyText';
 
+// what an open issue is read with
+const ISSUE = `number title url createdAt updatedAt author{login __typename}
+      labels(first:20){nodes{name}} assignees(first:5){nodes{login}}
+      parent{number repository{nameWithOwner}} subIssuesSummary{total completed} issueDependenciesSummary{blockedBy}
+      comments(last:1){totalCount nodes{${NOTE}}}`;
+
+// what a merged or closed pr is read with
+const CLOSED_PULL = `number title url isDraft createdAt updatedAt closedAt merged author{login __typename}
+      headRefName headRefOid baseRefName closingIssuesReferences(first:10){nodes{number}}
+      comments{totalCount} reviews{totalCount}`;
+
 export const SNAPSHOT_QUERY = `query($owner:String!,$name:String!){
   repository(owner:$owner,name:$name){
     defaultBranchRef{name}
     issues(states:OPEN,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
-      number title url createdAt updatedAt author{login __typename}
-      labels(first:20){nodes{name}} assignees(first:5){nodes{login}}
-      parent{number repository{nameWithOwner}} subIssuesSummary{total completed} issueDependenciesSummary{blockedBy}
-      comments(last:1){totalCount nodes{${NOTE}}}
+      ${ISSUE}
     }}
     closedIssues:issues(states:CLOSED,first:20,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
       number title url createdAt updatedAt closedAt stateReason author{login __typename}
@@ -29,9 +37,7 @@ export const SNAPSHOT_QUERY = `query($owner:String!,$name:String!){
       }}}}}}
     }}
     closedPulls:pullRequests(states:[MERGED,CLOSED],first:20,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
-      number title url isDraft createdAt updatedAt closedAt merged author{login __typename}
-      headRefName headRefOid baseRefName closingIssuesReferences(first:10){nodes{number}}
-      comments{totalCount} reviews{totalCount}
+      ${CLOSED_PULL}
     }}
   }
 }`;
@@ -244,6 +250,39 @@ type RestRun = {
 export function childrenQuery(numbers: readonly number[]): string {
   const parts = numbers.map((n) => `i${n}:issue(number:${n}){subIssues(first:100){nodes{number title url state repository{nameWithOwner} subIssuesSummary{total completed}}}}`);
   return `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){${parts.join(' ')}}}`;
+}
+
+// the given issues by number, in one query, open or closed: each issue is its own alias
+export function issuesQuery(numbers: readonly number[]): string {
+  const parts = numbers.map((n) => `i${n}:issue(number:${n}){${ISSUE} state closedAt stateReason} p${n}:pullRequest(number:${n}){number}`);
+  return `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){${parts.join(' ')}}}`;
+}
+
+// an issue that does not resolve, deleted or really a pull request, comes back null, and its pull request alias says which
+export type IssuesRead = { repository: Record<string, ((GqlIssue & { state: string }) | { number: number }) | null> };
+
+export function fromIssues(read: IssuesRead): Issue[] {
+  return Object.entries(read.repository).flatMap(([alias, i]) => (i && alias.startsWith('i') ? [issue(i as GqlIssue & { state: string }, (i as { state: string }).state === 'CLOSED' ? 'closed' : 'open')] : []));
+}
+
+// why each of the given numbers does not resolve as an issue: no such number, or a pull request's
+export function goneIssues(read: IssuesRead, numbers: readonly number[]): Record<number, 'gone' | 'pull'> {
+  const out: Record<number, 'gone' | 'pull'> = {};
+  for (const n of numbers) if (!read.repository[`i${n}`]) out[n] = read.repository[`p${n}`] ? 'pull' : 'gone';
+  return out;
+}
+
+// the prs that close each of the given issues, merged or closed too: each issue is its own alias
+export function pullsQuery(numbers: readonly number[]): string {
+  const parts = numbers.map((n) => `i${n}:issue(number:${n}){closedByPullRequestsReferences(first:10,includeClosedPrs:true){nodes{${CLOSED_PULL}}}}`);
+  return `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){${parts.join(' ')}}}`;
+}
+
+// an issue that could not be read comes back null
+export type PullsRead = { repository: Record<string, { closedByPullRequestsReferences: GqlConnection<GqlPull> } | null> };
+
+export function fromPulls(read: PullsRead): Pull[] {
+  return Object.values(read.repository).flatMap((i) => (i ? i.closedByPullRequestsReferences.nodes.map(pull) : []));
 }
 
 type GqlChild = { number: number; title: string; url: string; state: string; repository: { nameWithOwner: string }; subIssuesSummary?: { total: number; completed: number } };

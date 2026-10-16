@@ -2,10 +2,10 @@ import type { ClaimBody, DecisionBody, QueueBody, RegisterBody, ReportBody, Subs
 import { isOpen } from '../core/decision.ts';
 import { workKey } from '../core/protocol.ts';
 import { inherited, selfWorked } from '../core/work.ts';
-import type { AdoptionRecord, AgentRecord, Answer, Audience, Decision, HelmEvent, Leftover, Letter, Phase, RepoName, RoutingPick, Session, SessionRole, Subscription, Work } from '../core/types.ts';
+import type { AdoptionRecord, AgentRecord, Answer, Audience, Decision, HelmEvent, Leftover, Letter, Phase, RepoName, RoutingPick, Session, SessionRole, Subscription, Unattended, Work } from '../core/types.ts';
 
 // bumped when the stored shape changes; an older file is migrated or refused, never read as this one
-export const LEDGER_VERSION = 5;
+export const LEDGER_VERSION = 6;
 
 // an issue that opened while helm watched its repository, held until a session owns it, it closes, or the fleet hears
 // that nobody owns it. alone: no live repo session was in its repository when it opened
@@ -49,6 +49,12 @@ export function migrate(data: LedgerData): LedgerData {
       .map((w) => ({ ...w.routing!, repo: w.repo, issue: w.issue, ...(w.agent ? { agent: w.agent } : {}) }))
       .sort((a, b) => a.at - b.at);
     data.version = 5;
+  }
+  if (data.version === 5) {
+    // version 5 kept every stored role, a default as firmly as one asked for. a default never made a coordinator, nor an
+    // other session with a repository, so those were asked for
+    for (const s of Object.values(data.sessions)) if (s.role === 'coordinator' || (s.role === 'other' && s.repo)) s.asked = true;
+    data.version = 6;
   }
   return data;
 }
@@ -163,8 +169,10 @@ export class Ledger {
     this.changed = changed;
   }
 
-  // a role asked for wins; otherwise a known session keeps its own, and a new one goes on with the role of the session
-  // it goes on from, or defaults by its checkout. a role from a mod before protocol 3 is its guess, a default only
+  // a role asked for wins; otherwise a known session keeps the role it asked for, and a new one the role the session it
+  // goes on from asked for. any other role is a default, worked out again on every register by the checkout, so a
+  // session that registered once outside one is the repo session of the checkout it comes back in. a role from a mod
+  // before protocol 3 is its guess, a default only
   register(b: RegisterBody): Session {
     const now = this.now();
     const was = this.data.sessions[b.id];
@@ -172,10 +180,12 @@ export class Ledger {
     const asked = (b.protocol ?? 0) >= 3 ? b.role : undefined;
     const guess = (b.protocol ?? 0) >= 3 ? undefined : b.role;
     const repo = was ? (was.repo ?? b.repo) : (prev?.repo ?? b.repo);
-    const role: SessionRole = asked ?? was?.role ?? prev?.role ?? guess ?? (repo ? 'repo' : 'other');
+    const kept = was ? (was.asked ? was.role : undefined) : prev?.asked ? prev.role : undefined;
+    const role: SessionRole = asked ?? kept ?? guess ?? (repo ? 'repo' : 'other');
     const s: Session = {
       id: b.id,
       role,
+      ...(asked ?? kept ? { asked: true } : {}),
       cwd: b.cwd,
       agents: was?.agents ?? [],
       startedAt: was?.startedAt ?? now,
@@ -205,6 +215,7 @@ export class Ledger {
     const s = this.data.sessions[id];
     if (!s) return undefined;
     s.role = role;
+    s.asked = true;
     if (repo) s.repo = repo;
     this.roleSubscription(s);
     this.changed();
@@ -581,7 +592,7 @@ export class Ledger {
   }
 
   // at is when it finished, when that was before now: a close helm learns of late
-  finish(repo: string, issue: number, how: 'merged' | 'closed', at = this.now()): Work | undefined {
+  finish(repo: string, issue: number, how: 'merged' | 'closed' | 'gone' | 'pull', at = this.now()): Work | undefined {
     const w = this.data.work[workKey(repo, issue)];
     if (!w || w.finished) return undefined;
     w.finished = { at: Math.min(at, this.now()), how };
@@ -632,6 +643,22 @@ export class Ledger {
     if (d.to !== 'session') throw new Error(`decision ${id} is already the person's`);
     this.toPerson(d, by, note);
     return d;
+  }
+
+  // a session back after it was gone takes again what went to the person only because it was gone: the open decisions
+  // about its own work that would be addressed to it now. what it escalated itself stays the person's
+  reclaim(id: string): Decision[] {
+    if (!this.live(id)) return [];
+    const now = this.now();
+    const out = Object.values(this.data.decisions).filter((d) => isOpen(d) && d.to === 'person' && (d.escalated === undefined || d.escalated.by === 'helm') && this.audience(d).session === id);
+    for (const d of out) {
+      d.to = 'session';
+      d.session = id;
+      delete d.escalated;
+      d.updatedAt = now;
+    }
+    if (out.length) this.changed();
+    return out;
   }
 
   // the open decisions addressed to a session that is gone, handed on to the person
@@ -754,6 +781,21 @@ export class Ledger {
     if (delivered) u.delivered = this.now();
     else delete this.data.unowned[key];
     this.changed();
+  }
+
+  // the repositories with unfinished work, or that had a repo session, where no repo session is live
+  unattended(): Unattended[] {
+    const sessions = Object.values(this.data.sessions);
+    const live = new Set(sessions.filter((s) => !s.gone && s.role === 'repo' && s.repo).map((s) => s.repo!));
+    const out = new Map<RepoName, Unattended>();
+    const of = (repo: RepoName) => out.get(repo) ?? out.set(repo, { repo, open: 0 }).get(repo)!;
+    for (const s of sessions) {
+      if (s.role !== 'repo' || !s.repo || live.has(s.repo)) continue;
+      const u = of(s.repo);
+      if (!u.last || s.seenAt > u.last.seenAt) u.last = { session: s.id, seenAt: s.seenAt };
+    }
+    for (const w of Object.values(this.data.work)) if (!w.finished && !live.has(w.repo)) of(w.repo).open++;
+    return [...out.values()].sort((a, b) => a.repo.localeCompare(b.repo));
   }
 
   live(session: string): boolean {

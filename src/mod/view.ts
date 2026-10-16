@@ -3,7 +3,7 @@ import { forPerson, forSession } from '../core/decision.ts';
 import { percent } from '../core/tree.ts';
 import type { Decision, Fleet, Job, Phase, Rollup, Run, SessionRole, TreeNode, WorkView } from '../core/types.ts';
 import { selfWorked } from '../core/work.ts';
-import { ago } from './format.ts';
+import { ago, unattendedLine } from './format.ts';
 
 // what a surface draws: rows of styled segments, so the drawing is plain data the hooks module maps onto elements.
 // a segment with press is a control: its press is the address the hooks module routes, its hotkey one key
@@ -195,6 +195,7 @@ function workTab(f: Fleet, self: Self, o: PaneOpts): Row[] {
   }
   const fmt = { cols: o.cols, fleet: s.fleet, now: f.at };
   if (s.fleet) {
+    if (f.unattended.length) rows.push([], ...f.unattended.map((u): Row => [{ text: unattendedLine(u, f.at), color: 'warning' }]));
     const live = f.sessions.filter((x) => !x.gone);
     for (const x of live) {
       const mine = s.work.filter((w) => w.owner === x.id).sort(byRank);

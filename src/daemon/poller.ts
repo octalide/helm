@@ -1,7 +1,8 @@
 import { isDone, verdictOf } from '../core/checks.ts';
-import type { Child, ForgeState, HelmEvent, Issue, Run } from '../core/types.ts';
+import type { Child, ForgeState, HelmEvent, Issue, Pull, Run } from '../core/types.ts';
 import { type CiMemory, diffForge, emptyMemory } from './events.ts';
-import { type ChildrenRead, childrenQuery, fromChildren, fromJobs, fromRuns, fromSnapshot, type RestJobs, type RestRuns, SNAPSHOT_QUERY, type Snapshot } from './forge.ts';
+import { branchFor, pullFor } from './derive.ts';
+import { type ChildrenRead, childrenQuery, fromChildren, fromIssues, fromJobs, fromPulls, fromRuns, fromSnapshot, goneIssues, type IssuesRead, issuesQuery, type PullsRead, pullsQuery, type RestJobs, type RestRuns, SNAPSHOT_QUERY, type Snapshot } from './forge.ts';
 import type { GitHub } from './github.ts';
 
 export const CACHE_VERSION = 2;
@@ -20,7 +21,8 @@ export type RepoCache = {
 
 export const emptyCache = (): RepoCache => ({ version: CACHE_VERSION, memory: emptyMemory(), tags: {}, childSig: {} });
 
-export type PollResult = { changed: boolean; events: HelmEvent[] };
+// gone: tracked numbers that no longer resolve as issues, and whether each is a pull request
+export type PollResult = { changed: boolean; events: HelmEvent[]; gone: Record<number, 'gone' | 'pull'> };
 
 // a full read at least this often, so a check from outside actions that the probes cannot see still lands
 const SNAPSHOT_MAX_AGE_MS = 10 * 60_000;
@@ -29,9 +31,12 @@ const JOB_READS = 12;
 const RUNS_PAGE = 30;
 // parents whose sub-issues one query reads
 const CHILD_BATCH = 25;
+// issues one query reads by number
+const ISSUE_BATCH = 50;
 
 // one repository's forge state. each poll asks two conditional probes, which cost nothing when unchanged, and reads
-// the graphql snapshot only when one moved, a status check is pending, or the snapshot has aged out
+// the graphql snapshot only when one moved, a status check is pending, or the snapshot has aged out. tracked are the
+// issues helm has work for, held whether or not the snapshot's pages reach them
 export class RepoPoller {
   readonly repo: string;
   cache: RepoCache;
@@ -49,7 +54,7 @@ export class RepoPoller {
     return this.cache.forge;
   }
 
-  async poll(now: number, force = false): Promise<PollResult> {
+  async poll(now: number, force = false, tracked: readonly number[] = []): Promise<PollResult> {
     const prev = this.cache.forge;
     const [owner, name] = this.repo.split('/') as [string, string];
     const items = await this.gh.conditional<unknown[]>(`repos/${this.repo}/issues?state=all&sort=updated&direction=desc&per_page=1`);
@@ -58,11 +63,16 @@ export class RepoPoller {
     const stale = now - (this.cache.snapshotAt ?? 0) > SNAPSHOT_MAX_AGE_MS;
     let base = prev ? { defaultBranch: prev.defaultBranch, issues: prev.issues, pulls: prev.pulls } : undefined;
     let children = prev?.children ?? {};
+    let fresh = false;
     if (!base || force || items.changed || runsRead.changed || statusPending || stale) {
       base = fromSnapshot(await this.gh.graphql<Snapshot>(SNAPSHOT_QUERY, { owner, name }));
       children = await this.children(base.issues, children, stale || force);
       this.cache.snapshotAt = now;
+      fresh = true;
     }
+    const read = await this.withTracked(base.issues, tracked, prev?.issues ?? []);
+    base = { ...base, issues: read.issues };
+    base = { ...base, pulls: await this.withTrackedPulls(base.pulls, tracked, prev?.pulls ?? [], fresh) };
     const runs = await this.withJobs(fromRuns(runsRead.body), prev?.runs ?? [], now);
     for (const r of runs) {
       const tag = await this.isTag(r);
@@ -72,7 +82,7 @@ export class RepoPoller {
     const { events, memory } = diffForge(prev, next, this.cache.memory, { now, stallMs: this.stallMs() });
     const changed = !prev || stripTime(prev) !== stripTime(next);
     this.cache = { ...this.cache, forge: next, memory };
-    return { changed, events };
+    return { changed, events, gone: read.gone };
   }
 
   // whether anything here is moving: a run in flight or a pr head waiting on checks
@@ -96,6 +106,49 @@ export class RepoPoller {
         const read = await this.gh.conditional<RestJobs>(`repos/${this.repo}/actions/runs/${r.id}/jobs?per_page=100`).catch(() => undefined);
         out.push(read ? { ...r, jobs: fromJobs(read.body) } : withOld(r, old));
       } else out.push(withOld(r, old));
+    }
+    return out;
+  }
+
+  // the snapshot reads open issues to its first page and only the latest closed ones, so a tracked issue it misses is
+  // read by number: closed past that window, or open past that page. a read that fails keeps what was known of its issues
+  // and finishes nothing. a number that resolves as no issue is reported gone, for the work on it to finish
+  private async withTracked(issues: readonly Issue[], tracked: readonly number[], before: readonly Issue[]): Promise<{ issues: Issue[]; gone: Record<number, 'gone' | 'pull'> }> {
+    const held = new Set(issues.map((i) => i.number));
+    const missing = [...new Set(tracked)].filter((n) => !held.has(n));
+    const [owner, name] = this.repo.split('/') as [string, string];
+    const known = new Map(before.map((i) => [i.number, i]));
+    const out = [...issues];
+    const gone: Record<number, 'gone' | 'pull'> = {};
+    for (let at = 0; at < missing.length; at += ISSUE_BATCH) {
+      const batch = missing.slice(at, at + ISSUE_BATCH);
+      const read = await this.gh.graphql<IssuesRead>(issuesQuery(batch), { owner, name }, { partial: true }).catch(() => undefined);
+      if (read) {
+        out.push(...fromIssues(read));
+        Object.assign(gone, goneIssues(read, batch));
+      }
+      else out.push(...batch.flatMap((n) => known.get(n) ?? []));
+    }
+    return { issues: out, gone };
+  }
+
+  // the snapshot reads only the latest closed prs, so the merged or closed pr of a tracked issue it misses is read by
+  // the issue. one found stays held (it is final), and an issue with none is looked up again only on a fresh snapshot
+  private async withTrackedPulls(pulls: readonly Pull[], tracked: readonly number[], before: readonly Pull[], fresh: boolean): Promise<Pull[]> {
+    const held = new Set(pulls.map((p) => p.number));
+    const out = [...pulls];
+    const missing: number[] = [];
+    for (const n of new Set(tracked)) {
+      if (pullFor(n, out)) continue;
+      const known = before.filter((p) => p.state !== 'open' && !held.has(p.number) && (p.closes.includes(n) || branchFor(n, p.head)));
+      if (known.length) out.push(...known);
+      else if (fresh) missing.push(n);
+    }
+    const [owner, name] = this.repo.split('/') as [string, string];
+    for (let at = 0; at < missing.length; at += ISSUE_BATCH) {
+      const batch = missing.slice(at, at + ISSUE_BATCH);
+      const read = await this.gh.graphql<PullsRead>(pullsQuery(batch), { owner, name }, { partial: true }).catch(() => undefined);
+      if (read) for (const p of fromPulls(read)) if (!out.some((o) => o.number === p.number)) out.push(p);
     }
     return out;
   }

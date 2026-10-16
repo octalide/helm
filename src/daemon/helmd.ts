@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { isDone, verdictOf } from '../core/checks.ts';
 import { type Config, DEFAULT_CONFIG, mergeConfig, repoLayer, RESTART_FIELDS, sourcesOf } from '../core/config.ts';
 import { isRecord } from '../core/decision.ts';
-import type { AnswerBody, Answered, ClaimBody, ConfigView, DecisionBody, EscalateBody, IssueDetail, QueueBody, RegisterBody, ReportBody, SettingsBody, SettingsView, StreamFrame, SubscribeBody } from '../core/protocol.ts';
+import type { AnswerBody, Answered, ClaimBody, ConfigView, DecisionBody, EscalateBody, IssueDetail, MessageBody, QueueBody, RegisterBody, ReportBody, SettingsBody, SettingsView, StreamFrame, SubscribeBody } from '../core/protocol.ts';
 import { PROTOCOL, workKey } from '../core/protocol.ts';
 import type { HelmPaths } from '../core/paths.ts';
 import type { AgentRecord, Decision, Fleet, ForgeState, HelmEvent, Letter, LetterPart, LocalState, Phase, PollStatus, Pull, RepoName, RepoView, Session, SessionRole, Subscription, TreeNode, Work, WorkView } from '../core/types.ts';
@@ -263,7 +263,9 @@ export class Daemon {
     const watching = st.lastPoll !== undefined;
     try {
       const p = await this.poller(repo);
-      const { changed, events } = await p.poll(this.now(), force);
+      const tracked = Object.values(this.ledger.data.work).filter((w) => w.repo === repo && !w.finished).map((w) => w.issue);
+      const { changed, events, gone } = await p.poll(this.now(), force, tracked);
+      for (const [n, how] of Object.entries(gone)) this.ledger.finish(repo, Number(n), how);
       this.savers.get(repo)?.save();
       st.failures = 0;
       delete st.error;
@@ -550,6 +552,7 @@ export class Daemon {
     return {
       version: this.version,
       sessions: Object.values(d.sessions).sort((a, b) => b.seenAt - a.seenAt),
+      unattended: this.ledger.unattended(),
       // a pane has no use for work finished before today
       work: lite ? work.filter((w) => !w.finished || this.now() - w.finished.at < LITE_DONE_MS) : work,
       tree: this.tree(work),
@@ -606,7 +609,16 @@ export class Daemon {
     if (s.repo) this.asked.set(s.repo, this.now());
     this.adopted(this.ledger.adopt(s.id, b.from));
     this.gaveBack(this.ledger.giveBack(s.id));
+    this.reclaimed(s.id, this.ledger.reclaim(s.id));
     return s;
+  }
+
+  // what went to the person while a session was gone is told to it as one delivery once it is back
+  private reclaimed(session: string, decisions: Decision[]): void {
+    if (!decisions.length) return;
+    const lines = [`this session is back, and the decisions helm handed to the person while it was gone are addressed to it again: ${decisions.map((d) => `${d.id} (${d.kind}${d.issue !== undefined ? ` #${d.issue}` : ''})`).join(', ')}`];
+    this.log(`session ${session} took back ${decisions.length} decisions`);
+    this.post({ session, text: letterText([{ head: 'decisions back', lines }]), parts: [{ head: 'decisions back', lines }], events: [], subs: [] });
   }
 
   // a repo session gone or ended leaves what it held to the one live repo session of its repository, when there is one
@@ -667,8 +679,14 @@ export class Daemon {
 
   heartbeat(id: string, agents: AgentRecord[]): Session | undefined {
     const before = new Map((this.ledger.data.sessions[id]?.agents ?? []).map((a) => [a.id, a.status]));
+    const back = this.ledger.data.sessions[id]?.gone === true;
     const s = this.ledger.heartbeat(id, agents);
     if (!s) return undefined;
+    // a session marked gone that beats again is back, as if it registered
+    if (back) {
+      this.adopted(this.ledger.adopt(id));
+      this.reclaimed(id, this.ledger.reclaim(id));
+    }
     // an agent whose loop stopped since the last beat, or that came and went between two
     for (const a of agents) {
       const was = before.get(a.id);
@@ -688,7 +706,7 @@ export class Daemon {
     }
   }
 
-  // what an ended agent left running in its work's worktree goes on the work item, and to its owner when there is any
+  // what an ended agent left running in its work's worktree goes on the work item, and to its owner while that session lives, else to the coordinator
   async agentEnded(session: string, agent: string): Promise<void> {
     for (const v of this.workViews()) {
       if (v.owner !== session || v.agent !== agent || v.finished || !v.worktree || v.worktree.main) continue;
@@ -710,7 +728,7 @@ export class Daemon {
           text: `${key} agent ${agent} ended and left ${found.length} process${found.length === 1 ? '' : 'es'} running in ${v.worktree.path}: ${v.title}`,
           detail: [...found.map((p) => `pid ${p.pid}: ${p.command.slice(0, 200)}`), 'helm kills nothing: whoever owns the work decides'],
           ...(v.pull ? { url: v.pull.url } : v.issueUrl ? { url: v.issueUrl } : {}),
-          owner: session,
+          ...(this.ledger.live(session) ? { owner: session } : {}),
         },
       ]);
     }
@@ -930,6 +948,18 @@ export class Daemon {
     // the recipient has the answer already; the event is for everyone else watching
     this.dispatch([event], live && recipient ? { except: recipient } : {});
     return { decision: d, delivered: Boolean(live) };
+  }
+
+  // a message one of a session's agents sent goes to that session's main loop, the session that dispatched the agent,
+  // whatever the agent addressed it to
+  message(b: MessageBody): Letter {
+    if (!this.ledger.data.sessions[b.session]) throw new Error(`no session ${b.session}`);
+    const w = Object.values(this.ledger.data.work).find((x) => !x.finished && x.owner === b.session && x.agent === b.agent);
+    const lines = [`agent ${b.agent}${w ? ` on ${workKey(w.repo, w.issue)}` : ''}, sent to ${JSON.stringify(b.to)}:`, ...b.text.split('\n').map((l) => `  ${l}`)];
+    const parts: LetterPart[] = [{ head: 'message', lines }];
+    const letter = this.ledger.post({ session: b.session, text: letterText(parts), parts, events: [], subs: [] });
+    this.send(letter);
+    return letter;
   }
 
   stream(session: string, write: (f: StreamFrame) => void): () => void {

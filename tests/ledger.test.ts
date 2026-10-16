@@ -37,6 +37,19 @@ describe('ledger', () => {
     expect(l.register({ id: 'A2', cwd: '/', repo: 'o/r', from: 'A', protocol: 3 }).role).toBe('coordinator');
     expect(l.register({ id: 'A2', cwd: '/', role: 'repo', protocol: 3 }).role).toBe('repo');
     expect(kinds('A2')).toEqual(['work']);
+    // a default is worked out again: a session first seen outside a checkout is the repo session of the one it is in now
+    expect(l.register({ id: 'O', cwd: '/', repo: 'o/r', protocol: 3 })).toMatchObject({ role: 'repo', repo: 'o/r' });
+  });
+
+  it('reads a version 5 ledger, keeping the roles a default could not have made as asked for', () => {
+    const data = emptyLedger();
+    const s = (id: string, role: Session['role'], repo?: string): Session => ({ id, role, cwd: '/', agents: [], startedAt: T0, seenAt: T0, ...(repo ? { repo } : {}) });
+    data.sessions = { C: s('C', 'coordinator'), X: s('X', 'other', 'o/r'), O: s('O', 'other'), R: s('R', 'repo', 'o/r') };
+    data.version = 5;
+    const l = new Ledger(data, () => T0);
+    expect(Object.values(l.data.sessions).map((x) => [x.id, x.asked ?? false])).toEqual([['C', true], ['X', true], ['O', false], ['R', false]]);
+    expect(l.register({ id: 'O', cwd: '/', repo: 'o/r', protocol: 3 }).role).toBe('repo');
+    expect(l.register({ id: 'X', cwd: '/', repo: 'o/r', protocol: 3 }).role).toBe('other');
   });
 
   it('refuses a claim on work a live session owns, unless forced', () => {
@@ -304,9 +317,12 @@ describe('phase', () => {
     expect(phaseOf({ ...a, report: { state: 'waiting', at: T0 } }, { agent: 'completed', pull: pull(101, { draft: true }), blocking: false, issueClosed: false })).toBe('draft');
     expect(phaseOf(a, { agent: 'gone', blocking: false, issueClosed: false })).toBe('stalled');
     // its pr head settled ci that its subscription held back: the delivery can no longer come
+    const draft = pull(101, { draft: true, checks: [check('t', 'success')] });
+    expect(phaseOf({ ...a, report: { state: 'waiting', at: T0 } }, { agent: 'idle', pull: draft, blocking: false, issueClosed: false, stuck: true })).toBe('stalled');
+    expect(phaseOf({ ...a, report: { state: 'waiting', at: T0 } }, { agent: 'running', pull: draft, blocking: false, issueClosed: false, stuck: true })).toBe('draft');
+    // a green pr out of draft waits only on its merge, whoever is left on it
     const green = pull(101, { checks: [check('t', 'success')] });
-    expect(phaseOf({ ...a, report: { state: 'waiting', at: T0 } }, { agent: 'idle', pull: green, blocking: false, issueClosed: false, stuck: true })).toBe('stalled');
-    expect(phaseOf({ ...a, report: { state: 'waiting', at: T0 } }, { agent: 'running', pull: green, blocking: false, issueClosed: false, stuck: true })).toBe('ready');
+    for (const agent of ['idle', 'completed', 'gone'] as const) expect(phaseOf({ ...a, report: { state: 'ready', at: T0 } }, { agent, pull: green, blocking: false, issueClosed: false, stuck: true })).toBe('ready');
   });
 
   it('counts a live session working an issue itself as its worker', () => {

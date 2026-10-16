@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG } from '../src/core/config.ts';
 import { HelmClient } from '../src/mod/client.ts';
 import { dispatchIssues, type DispatchPort } from '../src/mod/dispatch.ts';
+import { sendRoute } from '../src/mod/send.ts';
 import type { ToolEnv } from '../src/mod/tools.ts';
 
 function env(issues: Record<number, { state: string; pr?: boolean }>) {
@@ -65,5 +66,23 @@ describe('dispatch', () => {
     const port: DispatchPort = { now: () => 0, agentType: async () => 't', complete: async () => ({ failed: 'api-error' }), spawn: async () => ({ deny: 'no room' }) };
     const out = (await dispatchIssues(e, port, { issues: [1, 2, 3] })).split('\n');
     expect(out).toEqual(['o/r#1: closed, not dispatched', 'o/r#2: a pull request, not dispatched', 'o/r#3: the agent did not start: no room; it stays queued']);
+  });
+});
+
+describe('agent sends', () => {
+  const issue = (t: string) => t.startsWith('helm:issue-');
+  const agents = [
+    { id: 'x', type: 'helm:issue-opus-high' },
+    { id: 'y', type: 'Explore', parentId: 'x' },
+    { id: 'z', type: 'general-purpose', name: 'helper' },
+  ];
+
+  it('sends what an issue agent or its own agents address outside this session to its main loop', () => {
+    expect(sendRoute('coordinator', 'x', agents, issue)).toBe('session');
+    expect(sendRoute('uds:/run/user/1000/cc-socks/1.sock', 'y', agents, issue)).toBe('session');
+    expect(sendRoute('helper', 'x', agents, issue)).toBe('engine');
+    expect(sendRoute('y', 'x', agents, issue)).toBe('engine');
+    expect(sendRoute('coordinator', 'z', agents, issue)).toBe('engine');
+    expect(sendRoute('coordinator', 'gone', agents, issue)).toBe('engine');
   });
 });

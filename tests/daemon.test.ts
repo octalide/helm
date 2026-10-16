@@ -30,16 +30,37 @@ async function daemon(opts: { log?: (line: string) => void; gh?: GitHub; git?: G
   return { d, paths };
 }
 
-// a forge holding only the given issues, read in full on every poll
-function issuesGh(issues: Issue[]): GitHub {
+// a forge holding only the given issues, read in full on every poll, and past them those its snapshot misses, which
+// only a read by number finds
+function issuesGh(issues: Issue[], beyond: Issue[] = [], opts: { pulls?: number[]; failRead?: () => boolean; merged?: Record<number, number> } = {}): GitHub {
   const node = (i: Issue) => ({ number: i.number, title: i.title, url: i.url, createdAt: i.createdAt, updatedAt: i.updatedAt, ...(i.closedAt ? { closedAt: i.closedAt } : {}), author: { login: i.author.login, __typename: 'User' }, labels: { nodes: [] }, comments: { totalCount: 0 } });
   const of = (state: Issue['state']) => ({ nodes: issues.filter((i) => i.state === state).map(node) });
+  const byNumber = (query: string) => {
+    const read = (n: number) => beyond.find((i) => i.number === n) ?? issues.find((i) => i.number === n);
+    if (opts.failRead?.()) throw new Error('offline');
+    const found = [...query.matchAll(/i(\d+):issue\(/g)].map(([, n]) => [`i${n}`, read(Number(n))] as const);
+    const pulls = [...query.matchAll(/p(\d+):pullRequest\(/g)].map(([, n]) => [`p${n}`, opts.pulls?.includes(Number(n)) ? { number: Number(n) } : null] as const);
+    return { repository: { ...Object.fromEntries(found.map(([k, i]) => [k, i ? { ...node(i), state: i.state.toUpperCase() } : null])), ...Object.fromEntries(pulls) } };
+  };
+  // the merged pr of an issue, which only a read through the issue finds
+  const byIssue = (query: string) => ({
+    repository: Object.fromEntries(
+      [...query.matchAll(/i(\d+):issue\(/g)].map(([, n]) => {
+        const num = opts.merged?.[Number(n)];
+        const nodes = num ? [{ number: num, title: 'merged', url: '', isDraft: false, createdAt: '', updatedAt: '', closedAt: new Date(T0 - 3_600_000).toISOString(), merged: true, author: { login: 'a', __typename: 'User' }, headRefName: `fix/${n}`, headRefOid: '', baseRefName: 'dev', closingIssuesReferences: { nodes: [{ number: Number(n) }] }, comments: { totalCount: 0 }, reviews: { totalCount: 0 } }] : [];
+        return [`i${n}`, { closedByPullRequestsReferences: { nodes } }];
+      }),
+    ),
+  });
   return {
     rates: {},
     conditional: async (path: string) => ({ changed: true, body: path.includes('/actions/runs') ? { workflow_runs: [] } : [] }),
-    graphql: async () => ({ repository: { defaultBranchRef: { name: 'dev' }, issues: of('open'), closedIssues: of('closed'), pullRequests: { nodes: [] }, closedPulls: { nodes: [] } } }),
+    graphql: async (query: string) =>
+      query.includes('closedByPullRequestsReferences') ? byIssue(query) : query.includes('issue(number:') ? byNumber(query) : { repository: { defaultBranchRef: { name: 'dev' }, issues: of('open'), closedIssues: of('closed'), pullRequests: { nodes: [] }, closedPulls: { nodes: [] } } },
   } as unknown as GitHub;
 }
+
+const refreshViews = (d: Daemon) => (d as unknown as { refreshViews: () => void }).refreshViews();
 
 const checkUnowned = (d: Daemon) => (d as unknown as { checkUnowned: () => void }).checkUnowned();
 
@@ -110,6 +131,20 @@ describe('daemon', () => {
     d.answer(q.id, { text: 'this', by: 'human' });
     expect(lettersFor(d, 'A', 'x').map((l) => l.text.split('\n')[0])).toEqual([`[helm decision ${q.id} answered by human] which`]);
     expect(lettersFor(d, 'A').some((l) => l.text.includes(`decision ${q.id} answered by human`))).toBe(true);
+    await d.stop();
+  });
+
+  it('hands an agent\'s message to the main loop of its own session, not a coordinator live beside it', async () => {
+    const { d } = await daemon();
+    d.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    d.register({ id: 'C', cwd: '/', role: 'coordinator' });
+    d.ledger.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'x' }, 'one');
+    const before = lettersFor(d, 'C').length;
+    d.message({ session: 'A', agent: 'x', to: 'coordinator', text: 'pr 2 has my body\nnot mine to fix' });
+    expect(lettersFor(d, 'A').map((l) => l.text)).toEqual(['[helm message]\nagent x on o/r#1, sent to "coordinator":\n  pr 2 has my body\n  not mine to fix']);
+    expect(lettersFor(d, 'A', 'x')).toEqual([]);
+    expect(lettersFor(d, 'C').length).toBe(before);
+    expect(() => d.message({ session: 'Z', agent: 'x', to: 'coordinator', text: 'lost' })).toThrow('no session Z');
     await d.stop();
   });
 
@@ -194,7 +229,7 @@ describe('daemon', () => {
       return '';
     };
     const green = [check('test', 'success')];
-    const pulls = [pull(160, { sha: theirs, head: 'fix/160', checks: green }), pull(161, { sha: gone, head: 'fix/161', checks: green }), pull(162, { sha: unrelated, head: 'fix/162', checks: green })];
+    const pulls = [pull(160, { sha: theirs, head: 'fix/160', checks: green }), pull(161, { sha: gone, head: 'fix/161', checks: green }), pull(162, { sha: unrelated, head: 'fix/162', checks: green, draft: true })];
     const { d } = await daemon({
       gh: offline,
       git,
@@ -220,7 +255,7 @@ describe('daemon', () => {
     d.ledger.heartbeat('A', [{ id: 'unrelated', type: 'issue', description: '', status: 'idle' }]);
     d.ledger.report({ session: 'A', agent: 'unrelated', repo: 'o/r', issue: 162, state: 'waiting' });
     const phase = () => d.workViews().find((v) => v.issue === 162)?.phase;
-    expect(phase()).toBe('ready');
+    expect(phase()).toBe('draft');
     d.ledger.reviewHeld('o/r', (n) => pulls.find((p) => p.number === n)?.sha);
     expect(d.ledger.data.subscriptions[held.id]?.held).toEqual({ sha: unrelated, seen: true });
     expect(phase()).toBe('stalled');
@@ -309,6 +344,28 @@ describe('daemon', () => {
     internals.dispatch([{ id: 'ci:1', kind: 'ci', repo: 'o/r', at: T0, pr: 101, sha: 'a'.repeat(40), tags: ['settled', 'success'], text: 'ci settled success' }]);
     expect(lettersFor(d, 'B', 'x')).toEqual([]);
     expect(lettersFor(d, 'B').at(-1)!.text).toMatch(/^\[helm held for agent x\] it is gone with session A, whose o\/r#3 this session took over/);
+    await d.stop();
+  });
+
+  it('hands a session back what went to the person while it was gone, once it registers or beats again', async () => {
+    let now = T0;
+    const { d } = await daemon({ now: () => now });
+    d.register({ id: 'A', cwd: '/', repo: 'o/r', protocol: 3 });
+    d.ledger.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'x' }, 'one');
+    const q = d.ledger.report({ session: 'A', agent: 'x', repo: 'o/r', issue: 1, state: 'blocked', question: { title: 'q', body: '' } }).decisions[0]!;
+    const back = () => lettersFor(d, 'A').filter((l) => l.text.startsWith('[helm decisions back]'));
+    d.endSession('A');
+    expect([q.to, d.fleet().unattended]).toEqual(['person', [{ repo: 'o/r', open: 1, last: { session: 'A', seenAt: T0 } }]]);
+    // resumed under its own id, it is the repo session again with its decisions
+    expect(d.register({ id: 'A', cwd: '/', repo: 'o/r', protocol: 3 }).role).toBe('repo');
+    expect([q.to, q.session, d.fleet().unattended]).toEqual(['session', 'A', []]);
+    expect(back().map((l) => l.text.split('\n')[1])).toEqual([`this session is back, and the decisions helm handed to the person while it was gone are addressed to it again: ${q.id} (question #1)`]);
+    // marked gone while it slept, it is back with its next beat
+    now += 200_000;
+    (d as unknown as { sweep: () => void }).sweep();
+    expect(q.to).toBe('person');
+    d.heartbeat('A', []);
+    expect([q.to, q.session, back().length]).toEqual(['session', 'A', 2]);
     await d.stop();
   });
 
@@ -434,6 +491,37 @@ describe('daemon', () => {
     await again.stop();
   });
 
+  it('finishes released work on an issue closed past what the snapshot reads, though no close reached helm', async () => {
+    const closedAt = iso(T0 - 3_600_000);
+    const { d } = await daemon({ gh: issuesGh([issue(1)], [issue(34, { state: 'closed', closedAt, updatedAt: closedAt }), issue(35)], { merged: { 34: 500 } }) });
+    d.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    d.queue({ session: 'A', repo: 'o/r', issues: [34, 35, 36] });
+    for (const n of [34, 35, 36]) d.ledger.release('o/r', n, 'A');
+    await d.pollRepo('o/r');
+    refreshViews(d);
+    expect(d.ledger.data.work['o/r#34']!.finished).toEqual({ at: Date.parse(closedAt), how: 'merged' });
+    const phases = Object.fromEntries(d.workViews().map((v) => [v.issue, v.phase]));
+    expect(phases).toEqual({ 34: 'done', 35: 'queued', 36: 'done' });
+    expect(d.workViews().find((v) => v.issue === 35)!.issueState).toBe('open');
+    expect(d.ledger.data.work['o/r#36']!.finished!.how).toBe('gone');
+    await d.stop();
+  });
+
+  it('finishes work on a number that is a pull request with its own reason, and none on a failed read', async () => {
+    let offline = false;
+    const { d } = await daemon({ gh: issuesGh([issue(1)], [], { pulls: [40], failRead: () => offline }) });
+    d.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    d.queue({ session: 'A', repo: 'o/r', issues: [40, 41] });
+    for (const n of [40, 41]) d.ledger.release('o/r', n, 'A');
+    offline = true;
+    await d.pollRepo('o/r');
+    expect([40, 41].map((n) => d.ledger.data.work[`o/r#${n}`]!.finished)).toEqual([undefined, undefined]);
+    offline = false;
+    await d.pollRepo('o/r');
+    expect([40, 41].map((n) => d.ledger.data.work[`o/r#${n}`]!.finished?.how)).toEqual(['pull', 'gone']);
+    await d.stop();
+  });
+
   it('tells the fleet at once of an issue opened where no repo session is live, unless a session queued it first', async () => {
     let now = T0;
     const issues = [issue(1)];
@@ -444,7 +532,7 @@ describe('daemon', () => {
     issues.push(...[7, 8].map((n) => issue(n, { createdAt: iso(now - 30_000), updatedAt: iso(now - 30_000) })));
     d.queue({ session: 'C', repo: 'o/r', issues: [8] });
     await d.pollRepo('o/r');
-    expect(lettersFor(d, 'C').flatMap((l) => l.text.split('\n')).filter((l) => l.includes('unowned') || l.includes('live session'))).toEqual(['issue #7 opened with no live session in o/r: issue 7']);
+    expect(lettersFor(d, 'C').flatMap((l) => l.text.split('\n')).filter((l) => l.includes('unowned') || l.includes('repo session'))).toEqual(['issue #7 opened with no live repo session in o/r: issue 7']);
     await d.stop();
   });
 });

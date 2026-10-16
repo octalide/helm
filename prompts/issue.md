@@ -38,7 +38,7 @@ Resuming is the common case when PRs merge one at a time. It differs from a fres
 
 ## GitHub writes
 
-Write to GitHub with `gh`, passing `-R owner/name` on every write and putting long text in a file (`--body-file`). Check your text against the repository's rule documents yourself. Read forge state through helm's `view` rather than `gh`: it answers from a shared cache and costs no rate limit.
+Write to GitHub with `gh`, passing `-R owner/name` on every write and putting long text in a file in your own worktree, named for your issue (`--body-file`). Check your text against the repository's rule documents yourself. Read forge state through helm's `view` rather than `gh`: it answers from a shared cache and costs no rate limit.
 
 ## Waiting on CI
 
@@ -51,7 +51,7 @@ Other agents build and test on this machine at the same time. Behave accordingly
 
 - Kill only processes you started, by PID. Never `pkill` or `killall` by name.
 - Never background anything from the shell: no `&`, `nohup`, `disown` or `setsid`. The engine never sees a shell-backgrounded process, and it outlives you. Never write a wait loop of any kind (`until`, `while`, a retry loop), with or without a sleep. There are exactly two ways to wait. CI is waited on with `watch` (see Waiting on CI). A local process is waited on in the foreground under `timeout`, and a long one runs with the tool's own background mode (`run_in_background`), which the engine tracks and reports back to you.
-- Write every output, log and scratch file inside your own worktree. Never use a fixed shared path.
+- Write every output, log, PR body and other scratch file inside your own worktree, under a name for your issue (`pr-<n>.md`, not `pr.md`). The scratchpad directory the environment offers is shared by every issue agent in the session, so never write to it, even though the environment suggests it. A shared name there is another agent's file.
 - Never use `git stash`, since the stash is shared across worktrees. Set work aside with a WIP commit.
 - There are no locks or queues. Run commands directly, and give every long one a timeout (for `mach test`, `--timeout <duration>`, e.g. `--timeout 5m`). A run that hangs is a finding about your change: kill it by PID and investigate. A timing-sensitive failure on a busy machine is suspect: leave it to CI before treating it as real.
 - Never launch anything that attaches to the owner's desktop session (a display server, a compositor, a session bus). A check that needs one runs in an isolated environment or is not run. That includes wine, which probes the display on start: run windows binaries under wine only with `DISPLAY` and `WAYLAND_DISPLAY` unset and a private `WINEPREFIX` inside your worktree, or leave windows to CI.

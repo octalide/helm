@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.0
+
+Sessions need `/reload-plugins`: the protocol moves to 4. A session on an older mod is told so and keeps using helmd. The ledger moves to version 6. helmd migrates it on start, and a 0.8.x helmd does not read it after.
+
+- An issue agent's message goes to the session that dispatched it. Before, an agent answering its parent by the name "coordinator" reached whichever session on the machine carried that name. A send that names no other agent of its own session is handed to that session's main loop as a `[helm message]` (#109).
+- Work on an issue that closed outside the snapshot's window now finishes. helmd reads every issue it has work for by number, and the merged pr of such work through its issue, so a closed issue no longer shows as queued unowned work (#107, #116).
+- Work on a number that no longer resolves as an issue finishes as `gone`, or `pull` when the number is a pull request. A failed read finishes nothing (#115).
+- A green pr out of draft is `ready` whether or not its agent is still on it, and no longer reads as stalled (#108).
+- A work item's phase changes and leftovers go to the session that owns it. The coordinator hears them only for its own work, work nobody owns, or work whose owner is gone (#108, #117).
+- A role a session asked for is kept, and a default role is worked out again on every register, so a session back in a checkout is its repo session again. A session back from gone takes back the decisions handed to the person while it was gone, and a gone session that heartbeats again takes over like a register. Repositories with no live repo session are listed in `view fleet`, the coordinator's pane and the web overview (#110).
+- Issue agents keep PR text and scratch files in their own worktree, never the session's shared scratchpad (#120).
+
 ## 0.8.1
 
 - A session's own helm stream process is no longer reported as an ended agent's leftover when it happens to run in that agent's worktree (#104).
