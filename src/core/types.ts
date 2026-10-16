@@ -242,7 +242,7 @@ export type Work = {
   queuedAt: number;
   claimedAt?: number;
   updatedAt: number;
-  finished?: { at: number; how: 'merged' | 'closed' | 'abandoned' };
+  finished?: { at: number; how: 'merged' | 'closed' | 'abandoned' | 'gone' | 'pull' };
   // taken over from a gone session; agent is the one it had then, gone with that session and so never resumed
   adopted?: { from: string; at: number; agent?: string };
 };

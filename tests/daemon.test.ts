@@ -32,13 +32,15 @@ async function daemon(opts: { log?: (line: string) => void; gh?: GitHub; git?: G
 
 // a forge holding only the given issues, read in full on every poll, and past them those its snapshot misses, which
 // only a read by number finds
-function issuesGh(issues: Issue[], beyond: Issue[] = []): GitHub {
+function issuesGh(issues: Issue[], beyond: Issue[] = [], opts: { pulls?: number[]; failRead?: () => boolean } = {}): GitHub {
   const node = (i: Issue) => ({ number: i.number, title: i.title, url: i.url, createdAt: i.createdAt, updatedAt: i.updatedAt, ...(i.closedAt ? { closedAt: i.closedAt } : {}), author: { login: i.author.login, __typename: 'User' }, labels: { nodes: [] }, comments: { totalCount: 0 } });
   const of = (state: Issue['state']) => ({ nodes: issues.filter((i) => i.state === state).map(node) });
   const byNumber = (query: string) => {
     const read = (n: number) => beyond.find((i) => i.number === n) ?? issues.find((i) => i.number === n);
+    if (opts.failRead?.()) throw new Error('offline');
     const found = [...query.matchAll(/i(\d+):issue\(/g)].map(([, n]) => [`i${n}`, read(Number(n))] as const);
-    return { repository: Object.fromEntries(found.map(([k, i]) => [k, i ? { ...node(i), state: i.state.toUpperCase() } : null])) };
+    const pulls = [...query.matchAll(/p(\d+):pullRequest\(/g)].map(([, n]) => [`p${n}`, opts.pulls?.includes(Number(n)) ? { number: Number(n) } : null] as const);
+    return { repository: { ...Object.fromEntries(found.map(([k, i]) => [k, i ? { ...node(i), state: i.state.toUpperCase() } : null])), ...Object.fromEntries(pulls) } };
   };
   return {
     rates: {},
@@ -453,8 +455,24 @@ describe('daemon', () => {
     refreshViews(d);
     expect(d.ledger.data.work['o/r#34']!.finished).toEqual({ at: Date.parse(closedAt), how: 'closed' });
     const phases = Object.fromEntries(d.workViews().map((v) => [v.issue, v.phase]));
-    expect(phases).toEqual({ 34: 'done', 35: 'queued', 36: 'queued' });
+    expect(phases).toEqual({ 34: 'done', 35: 'queued', 36: 'done' });
     expect(d.workViews().find((v) => v.issue === 35)!.issueState).toBe('open');
+    expect(d.ledger.data.work['o/r#36']!.finished!.how).toBe('gone');
+    await d.stop();
+  });
+
+  it('finishes work on a number that is a pull request with its own reason, and none on a failed read', async () => {
+    let offline = false;
+    const { d } = await daemon({ gh: issuesGh([issue(1)], [], { pulls: [40], failRead: () => offline }) });
+    d.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    d.queue({ session: 'A', repo: 'o/r', issues: [40, 41] });
+    for (const n of [40, 41]) d.ledger.release('o/r', n, 'A');
+    offline = true;
+    await d.pollRepo('o/r');
+    expect([40, 41].map((n) => d.ledger.data.work[`o/r#${n}`]!.finished)).toEqual([undefined, undefined]);
+    offline = false;
+    await d.pollRepo('o/r');
+    expect([40, 41].map((n) => d.ledger.data.work[`o/r#${n}`]!.finished?.how)).toEqual(['pull', 'gone']);
     await d.stop();
   });
 
