@@ -552,6 +552,7 @@ export class Daemon {
     return {
       version: this.version,
       sessions: Object.values(d.sessions).sort((a, b) => b.seenAt - a.seenAt),
+      unattended: this.ledger.unattended(),
       // a pane has no use for work finished before today
       work: lite ? work.filter((w) => !w.finished || this.now() - w.finished.at < LITE_DONE_MS) : work,
       tree: this.tree(work),
@@ -608,7 +609,16 @@ export class Daemon {
     if (s.repo) this.asked.set(s.repo, this.now());
     this.adopted(this.ledger.adopt(s.id, b.from));
     this.gaveBack(this.ledger.giveBack(s.id));
+    this.reclaimed(s.id, this.ledger.reclaim(s.id));
     return s;
+  }
+
+  // what went to the person while a session was gone is told to it as one delivery once it is back
+  private reclaimed(session: string, decisions: Decision[]): void {
+    if (!decisions.length) return;
+    const lines = [`this session is back, and the decisions helm handed to the person while it was gone are addressed to it again: ${decisions.map((d) => `${d.id} (${d.kind}${d.issue !== undefined ? ` #${d.issue}` : ''})`).join(', ')}`];
+    this.log(`session ${session} took back ${decisions.length} decisions`);
+    this.post({ session, text: letterText([{ head: 'decisions back', lines }]), parts: [{ head: 'decisions back', lines }], events: [], subs: [] });
   }
 
   // a repo session gone or ended leaves what it held to the one live repo session of its repository, when there is one
@@ -669,8 +679,14 @@ export class Daemon {
 
   heartbeat(id: string, agents: AgentRecord[]): Session | undefined {
     const before = new Map((this.ledger.data.sessions[id]?.agents ?? []).map((a) => [a.id, a.status]));
+    const back = this.ledger.data.sessions[id]?.gone === true;
     const s = this.ledger.heartbeat(id, agents);
     if (!s) return undefined;
+    // a session marked gone that beats again is back, as if it registered
+    if (back) {
+      this.adopted(this.ledger.adopt(id));
+      this.reclaimed(id, this.ledger.reclaim(id));
+    }
     // an agent whose loop stopped since the last beat, or that came and went between two
     for (const a of agents) {
       const was = before.get(a.id);

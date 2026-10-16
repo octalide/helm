@@ -2,7 +2,7 @@ import { isDone, isPassing, verdictOf } from '../core/checks.ts';
 import { forPerson, isOpen, isRecord, unreviewed } from '../core/decision.ts';
 import { rollupText } from '../core/tree.ts';
 import { selfWorked } from '../core/work.ts';
-import type { Branch, Check, Decision, Fleet, ForgeState, Issue, Job, LocalState, Pull, Run, Session, Subscription, TreeNode, Worktree, WorkView } from '../core/types.ts';
+import type { Branch, Check, Decision, Fleet, ForgeState, Issue, Job, LocalState, Pull, Run, Session, Subscription, TreeNode, Unattended, Worktree, WorkView } from '../core/types.ts';
 
 export function ago(ms: number, now: number): string {
   const s = Math.max(0, Math.round((now - ms) / 1000));
@@ -120,6 +120,11 @@ export function sessionLine(s: Session, now: number, self?: string): string {
   return `${s.id}${s.id === self ? ' (this session)' : ''} ${s.role}${s.repo ? ` ${s.repo}` : ''}${s.title ? ` "${s.title}"` : ''} · ${s.agents.length} agents, ${live} live · ${s.gone ? 'gone' : 'seen'} ${ago(s.seenAt, now)} ago`;
 }
 
+export function unattendedLine(u: Unattended, now: number): string {
+  const open = u.open ? `${u.open} open work item${u.open === 1 ? '' : 's'}` : 'no open work';
+  return `${u.repo}: no live repo session · ${open}${u.last ? ` · last ${u.last.session}, seen ${ago(u.last.seenAt, now)} ago` : ''}`;
+}
+
 export function subscriptionLine(s: Subscription, describe: (s: Subscription) => string): string {
   return `${s.id} ${describe(s)} · ci ${s.ci}${s.tags ? ` · tags ${s.tags.join(',')}` : ''}${s.until ? ` · until ${typeof s.until === 'object' ? s.until.at : s.until}` : ''}${s.head ? ` · head ${s.head.slice(0, 7)}` : ''}${s.agent ? ` · for agent ${s.agent}` : ''}`;
 }
@@ -151,6 +156,7 @@ export function fleetBlock(f: Fleet, self: string | undefined, home?: string): s
   const bySession = new Map<string, WorkView[]>();
   for (const w of f.work.filter((x) => x.phase !== 'done')) bySession.set(w.owner ?? 'unowned', [...(bySession.get(w.owner ?? 'unowned') ?? []), w]);
   const lines = [`sessions ${live.length} live · work ${f.work.filter((w) => w.phase !== 'done').length} open · decisions ${person.length} for the person (${person.filter((d) => d.blocking).length} waiting), ${sessions} with sessions · ${records} records for review`];
+  if (f.unattended.length) lines.push('', ...f.unattended.map((u) => unattendedLine(u, f.at)));
   for (const s of live) {
     lines.push('', sessionLine(s, f.at, self));
     const mine = bySession.get(s.id) ?? [];
