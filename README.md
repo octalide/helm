@@ -79,6 +79,8 @@ Above the prompt, one line appears while something needs you, and the status lin
 
 Events reach whoever subscribed. A letter for the main loop rides the next tool result while a turn runs. Between turns, every letter waiting goes as one prompt that starts a turn, and what lands before that turn ends rides it or waits for its end. A letter for a subagent rides that agent's next tool call. After 60 s without one, or once the agent has ended its turn, it goes as a message that resumes the agent. If the engine refuses the message, the letter is relayed to the main loop and the agent's subscriptions are retired. Letters that go together read as one, a work item's older phases folded into its newest (`working → draft → ci`). helmd hands each letter out once. After a plugin reload, the module instance it replaced stands down at its next frame, so only the live one delivers.
 
+An issue agent answers only to the session that dispatched it. The engine resolves a SendMessage recipient against every session on the machine, so an agent replying to "the coordinator" its parent's message names would reach a session called that. A SendMessage from an issue agent, or from an agent it started, that names no other agent of its own session goes to that session's main loop instead, as a `[helm message]` letter naming the agent, its issue and the recipient it wrote.
+
 CI arrives as one verdict per PR head (`ci settled success` or `failure`, naming each failed check with the run to read), one stall notice when checks have not finished within an hour, and run completions on branches and tags.
 
 ## Phases
