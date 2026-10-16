@@ -263,7 +263,8 @@ export class Daemon {
     const watching = st.lastPoll !== undefined;
     try {
       const p = await this.poller(repo);
-      const { changed, events } = await p.poll(this.now(), force);
+      const tracked = Object.values(this.ledger.data.work).filter((w) => w.repo === repo && !w.finished).map((w) => w.issue);
+      const { changed, events } = await p.poll(this.now(), force, tracked);
       this.savers.get(repo)?.save();
       st.failures = 0;
       delete st.error;
