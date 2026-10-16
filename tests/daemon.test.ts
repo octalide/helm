@@ -30,16 +30,25 @@ async function daemon(opts: { log?: (line: string) => void; gh?: GitHub; git?: G
   return { d, paths };
 }
 
-// a forge holding only the given issues, read in full on every poll
-function issuesGh(issues: Issue[]): GitHub {
+// a forge holding only the given issues, read in full on every poll, and past them those its snapshot misses, which
+// only a read by number finds
+function issuesGh(issues: Issue[], beyond: Issue[] = []): GitHub {
   const node = (i: Issue) => ({ number: i.number, title: i.title, url: i.url, createdAt: i.createdAt, updatedAt: i.updatedAt, ...(i.closedAt ? { closedAt: i.closedAt } : {}), author: { login: i.author.login, __typename: 'User' }, labels: { nodes: [] }, comments: { totalCount: 0 } });
   const of = (state: Issue['state']) => ({ nodes: issues.filter((i) => i.state === state).map(node) });
+  const byNumber = (query: string) => {
+    const read = (n: number) => beyond.find((i) => i.number === n) ?? issues.find((i) => i.number === n);
+    const found = [...query.matchAll(/i(\d+):issue\(/g)].map(([, n]) => [`i${n}`, read(Number(n))] as const);
+    return { repository: Object.fromEntries(found.map(([k, i]) => [k, i ? { ...node(i), state: i.state.toUpperCase() } : null])) };
+  };
   return {
     rates: {},
     conditional: async (path: string) => ({ changed: true, body: path.includes('/actions/runs') ? { workflow_runs: [] } : [] }),
-    graphql: async () => ({ repository: { defaultBranchRef: { name: 'dev' }, issues: of('open'), closedIssues: of('closed'), pullRequests: { nodes: [] }, closedPulls: { nodes: [] } } }),
+    graphql: async (query: string) =>
+      query.includes('issue(number:') ? byNumber(query) : { repository: { defaultBranchRef: { name: 'dev' }, issues: of('open'), closedIssues: of('closed'), pullRequests: { nodes: [] }, closedPulls: { nodes: [] } } },
   } as unknown as GitHub;
 }
+
+const refreshViews = (d: Daemon) => (d as unknown as { refreshViews: () => void }).refreshViews();
 
 const checkUnowned = (d: Daemon) => (d as unknown as { checkUnowned: () => void }).checkUnowned();
 
@@ -208,7 +217,7 @@ describe('daemon', () => {
       return '';
     };
     const green = [check('test', 'success')];
-    const pulls = [pull(160, { sha: theirs, head: 'fix/160', checks: green }), pull(161, { sha: gone, head: 'fix/161', checks: green }), pull(162, { sha: unrelated, head: 'fix/162', checks: green })];
+    const pulls = [pull(160, { sha: theirs, head: 'fix/160', checks: green }), pull(161, { sha: gone, head: 'fix/161', checks: green }), pull(162, { sha: unrelated, head: 'fix/162', checks: green, draft: true })];
     const { d } = await daemon({
       gh: offline,
       git,
@@ -234,7 +243,7 @@ describe('daemon', () => {
     d.ledger.heartbeat('A', [{ id: 'unrelated', type: 'issue', description: '', status: 'idle' }]);
     d.ledger.report({ session: 'A', agent: 'unrelated', repo: 'o/r', issue: 162, state: 'waiting' });
     const phase = () => d.workViews().find((v) => v.issue === 162)?.phase;
-    expect(phase()).toBe('ready');
+    expect(phase()).toBe('draft');
     d.ledger.reviewHeld('o/r', (n) => pulls.find((p) => p.number === n)?.sha);
     expect(d.ledger.data.subscriptions[held.id]?.held).toEqual({ sha: unrelated, seen: true });
     expect(phase()).toBe('stalled');
@@ -446,6 +455,21 @@ describe('daemon', () => {
     checkUnowned(again);
     expect(heard(again)).toEqual(['issue #2 still unowned 30m after it opened: issue 2']);
     await again.stop();
+  });
+
+  it('finishes released work on an issue closed past what the snapshot reads, though no close reached helm', async () => {
+    const closedAt = iso(T0 - 3_600_000);
+    const { d } = await daemon({ gh: issuesGh([issue(1)], [issue(34, { state: 'closed', closedAt, updatedAt: closedAt }), issue(35)]) });
+    d.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    d.queue({ session: 'A', repo: 'o/r', issues: [34, 35, 36] });
+    for (const n of [34, 35, 36]) d.ledger.release('o/r', n, 'A');
+    await d.pollRepo('o/r');
+    refreshViews(d);
+    expect(d.ledger.data.work['o/r#34']!.finished).toEqual({ at: Date.parse(closedAt), how: 'closed' });
+    const phases = Object.fromEntries(d.workViews().map((v) => [v.issue, v.phase]));
+    expect(phases).toEqual({ 34: 'done', 35: 'queued', 36: 'queued' });
+    expect(d.workViews().find((v) => v.issue === 35)!.issueState).toBe('open');
+    await d.stop();
   });
 
   it('tells the fleet at once of an issue opened where no repo session is live, unless a session queued it first', async () => {

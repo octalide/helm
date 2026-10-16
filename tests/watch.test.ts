@@ -17,6 +17,11 @@ describe('matches', () => {
       for (const phase of ['blocked', 'failing', 'stalled']) expect(matches(work(['phase', phase], epic), s, ctx)).toBe(true);
       for (const tag of ['leftovers', 'adopted', 'returned']) expect(matches(work([tag], epic), s, ctx)).toBe(true);
     }
+    // another session's work is that session's to hear, the fleet's own is its own
+    const owned = (owner: string) => ev({ kind: 'work', issue: 2, tags: ['phase', 'stalled'], owner });
+    expect(matches(owned('A'), s, ctx)).toBe(false);
+    expect(matches(owned('A'), sub({ scope: { kind: 'work' }, session: 'A' }), ctx)).toBe(true);
+    expect(matches(owned('S'), s, ctx)).toBe(true);
     expect(matches(ev({ kind: 'epic', issue: 1, tags: ['progress'] }), s, ctx)).toBe(false);
     expect(matches(ev({ kind: 'epic', issue: 1, tags: ['progress', 'complete'] }), s, ctx)).toBe(true);
     expect(matches(ev({ kind: 'decision', tags: ['decision', 'question'] }), s, ctx)).toBe(true);
@@ -34,6 +39,7 @@ describe('matches', () => {
     expect(matches(work(['phase', 'ci'], 'o/r#1'), s, ctx)).toBe(false);
     expect(matches(work(['phase', 'ci']), s, ctx)).toBe(true);
     expect(matches(work(['phase', 'blocked'], 'o/r#1'), s, ctx)).toBe(true);
+    expect(matches(ev({ kind: 'work', issue: 2, tags: ['phase', 'ci'], owner: 'A' }), s, ctx)).toBe(true);
     expect(matches(ev({ kind: 'epic', issue: 1, tags: ['progress'] }), s, ctx)).toBe(true);
     expect(matches(ev({ kind: 'decision', tags: ['decision', 'question'] }), s, ctx)).toBe(false);
     expect(matches(ev({ issue: 3, tags: ['unowned'] }), s, ctx)).toBe(false);

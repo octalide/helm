@@ -64,14 +64,15 @@ export function phaseOf(w: Work, ctx: PhaseContext): Phase {
   const active = activeOf(w, ctx) || ctx.carried === true;
   // set aside with nobody on it is waiting on purpose, not stalled; someone still on it shows where it stands
   if (ctx.setAside && !active) return 'parked';
-  if (ctx.stuck && !active) return 'stalled';
   const pull = ctx.pull?.state === 'open' ? ctx.pull : undefined;
+  const verdict = pull ? verdictOf(pull.checks) : 'none';
+  // a green pr out of draft waits only on its merge, so whether anyone is still on it no longer matters
+  if (pull && !pull.draft && (verdict === 'success' || verdict === 'none')) return 'ready';
+  if (ctx.stuck && !active) return 'stalled';
   if (pull) {
-    const verdict = verdictOf(pull.checks);
     if (verdict === 'failure') return active ? 'failing' : 'stalled';
     if (pull.draft) return active ? 'draft' : 'stalled';
-    if (verdict === 'pending') return 'ci';
-    return 'ready';
+    return 'ci';
   }
   if (w.agent === undefined && !selfWorked(w)) return 'queued';
   return active ? 'working' : 'stalled';

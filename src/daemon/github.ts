@@ -65,10 +65,11 @@ export class GitHub {
     return (await this.request(path, {})).text();
   }
 
-  async graphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+  // partial takes what resolved despite errors, a field that did not coming back null
+  async graphql<T>(query: string, variables: Record<string, unknown>, opts: { partial?: boolean } = {}): Promise<T> {
     const res = await this.request('graphql', { 'content-type': 'application/json' }, { method: 'POST', body: JSON.stringify({ query, variables }) });
     const out = (await res.json()) as { data?: T; errors?: { message: string }[] };
-    if (out.errors?.length) throw new GitHubError(`graphql: ${out.errors.map((e) => e.message).join('; ')}`, 200);
+    if (out.errors?.length && !(opts.partial && out.data)) throw new GitHubError(`graphql: ${out.errors.map((e) => e.message).join('; ')}`, 200);
     if (!out.data) throw new GitHubError('graphql answered no data', 200);
     return out.data;
   }

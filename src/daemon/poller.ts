@@ -1,7 +1,7 @@
 import { isDone, verdictOf } from '../core/checks.ts';
 import type { Child, ForgeState, HelmEvent, Issue, Run } from '../core/types.ts';
 import { type CiMemory, diffForge, emptyMemory } from './events.ts';
-import { type ChildrenRead, childrenQuery, fromChildren, fromJobs, fromRuns, fromSnapshot, type RestJobs, type RestRuns, SNAPSHOT_QUERY, type Snapshot } from './forge.ts';
+import { type ChildrenRead, childrenQuery, fromChildren, fromIssues, fromJobs, fromRuns, fromSnapshot, type IssuesRead, issuesQuery, type RestJobs, type RestRuns, SNAPSHOT_QUERY, type Snapshot } from './forge.ts';
 import type { GitHub } from './github.ts';
 
 export const CACHE_VERSION = 2;
@@ -29,9 +29,12 @@ const JOB_READS = 12;
 const RUNS_PAGE = 30;
 // parents whose sub-issues one query reads
 const CHILD_BATCH = 25;
+// issues one query reads by number
+const ISSUE_BATCH = 50;
 
 // one repository's forge state. each poll asks two conditional probes, which cost nothing when unchanged, and reads
-// the graphql snapshot only when one moved, a status check is pending, or the snapshot has aged out
+// the graphql snapshot only when one moved, a status check is pending, or the snapshot has aged out. tracked are the
+// issues helm has work for, held whether or not the snapshot's pages reach them
 export class RepoPoller {
   readonly repo: string;
   cache: RepoCache;
@@ -49,7 +52,7 @@ export class RepoPoller {
     return this.cache.forge;
   }
 
-  async poll(now: number, force = false): Promise<PollResult> {
+  async poll(now: number, force = false, tracked: readonly number[] = []): Promise<PollResult> {
     const prev = this.cache.forge;
     const [owner, name] = this.repo.split('/') as [string, string];
     const items = await this.gh.conditional<unknown[]>(`repos/${this.repo}/issues?state=all&sort=updated&direction=desc&per_page=1`);
@@ -63,6 +66,7 @@ export class RepoPoller {
       children = await this.children(base.issues, children, stale || force);
       this.cache.snapshotAt = now;
     }
+    base = { ...base, issues: await this.withTracked(base.issues, tracked, prev?.issues ?? []) };
     const runs = await this.withJobs(fromRuns(runsRead.body), prev?.runs ?? [], now);
     for (const r of runs) {
       const tag = await this.isTag(r);
@@ -96,6 +100,23 @@ export class RepoPoller {
         const read = await this.gh.conditional<RestJobs>(`repos/${this.repo}/actions/runs/${r.id}/jobs?per_page=100`).catch(() => undefined);
         out.push(read ? { ...r, jobs: fromJobs(read.body) } : withOld(r, old));
       } else out.push(withOld(r, old));
+    }
+    return out;
+  }
+
+  // the snapshot reads open issues to its first page and only the latest closed ones, so a tracked issue it misses is
+  // read by number: closed past that window, or open past that page. a read that fails keeps what was known of its issues
+  private async withTracked(issues: readonly Issue[], tracked: readonly number[], before: readonly Issue[]): Promise<Issue[]> {
+    const held = new Set(issues.map((i) => i.number));
+    const missing = [...new Set(tracked)].filter((n) => !held.has(n));
+    const [owner, name] = this.repo.split('/') as [string, string];
+    const known = new Map(before.map((i) => [i.number, i]));
+    const out = [...issues];
+    for (let at = 0; at < missing.length; at += ISSUE_BATCH) {
+      const batch = missing.slice(at, at + ISSUE_BATCH);
+      const read = await this.gh.graphql<IssuesRead>(issuesQuery(batch), { owner, name }, { partial: true }).catch(() => undefined);
+      if (read) out.push(...fromIssues(read));
+      else out.push(...batch.flatMap((n) => known.get(n) ?? []));
     }
     return out;
   }
