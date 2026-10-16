@@ -645,6 +645,22 @@ export class Ledger {
     return d;
   }
 
+  // a session back after it was gone takes again what went to the person only because it was gone: the open decisions
+  // about its own work that would be addressed to it now. what it escalated itself stays the person's
+  reclaim(id: string): Decision[] {
+    if (!this.live(id)) return [];
+    const now = this.now();
+    const out = Object.values(this.data.decisions).filter((d) => isOpen(d) && d.to === 'person' && (d.escalated === undefined || d.escalated.by === 'helm') && this.audience(d).session === id);
+    for (const d of out) {
+      d.to = 'session';
+      d.session = id;
+      delete d.escalated;
+      d.updatedAt = now;
+    }
+    if (out.length) this.changed();
+    return out;
+  }
+
   // the open decisions addressed to a session that is gone, handed on to the person
   orphaned(session: string): Decision[] {
     const out = Object.values(this.data.decisions).filter((d) => isOpen(d) && d.to === 'session' && d.session === session);

@@ -335,6 +335,28 @@ describe('daemon', () => {
     await d.stop();
   });
 
+  it('hands a session back what went to the person while it was gone, once it registers or beats again', async () => {
+    let now = T0;
+    const { d } = await daemon({ now: () => now });
+    d.register({ id: 'A', cwd: '/', repo: 'o/r', protocol: 3 });
+    d.ledger.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'x' }, 'one');
+    const q = d.ledger.report({ session: 'A', agent: 'x', repo: 'o/r', issue: 1, state: 'blocked', question: { title: 'q', body: '' } }).decisions[0]!;
+    const back = () => lettersFor(d, 'A').filter((l) => l.text.startsWith('[helm decisions back]'));
+    d.endSession('A');
+    expect([q.to, d.fleet().unattended]).toEqual(['person', [{ repo: 'o/r', open: 1, last: { session: 'A', seenAt: T0 } }]]);
+    // resumed under its own id, it is the repo session again with its decisions
+    expect(d.register({ id: 'A', cwd: '/', repo: 'o/r', protocol: 3 }).role).toBe('repo');
+    expect([q.to, q.session, d.fleet().unattended]).toEqual(['session', 'A', []]);
+    expect(back().map((l) => l.text.split('\n')[1])).toEqual([`this session is back, and the decisions helm handed to the person while it was gone are addressed to it again: ${q.id} (question #1)`]);
+    // marked gone while it slept, it is back with its next beat
+    now += 200_000;
+    (d as unknown as { sweep: () => void }).sweep();
+    expect(q.to).toBe('person');
+    d.heartbeat('A', []);
+    expect([q.to, q.session, back().length]).toEqual(['session', 'A', 2]);
+    await d.stop();
+  });
+
   it('gives back what a session adopted once it leaves the repo role, and the repository\'s live repo session takes it', async () => {
     const { d } = await daemon();
     d.register({ id: 'A', cwd: '/', repo: 'o/r', protocol: 3 });
