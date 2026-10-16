@@ -32,7 +32,7 @@ async function daemon(opts: { log?: (line: string) => void; gh?: GitHub; git?: G
 
 // a forge holding only the given issues, read in full on every poll, and past them those its snapshot misses, which
 // only a read by number finds
-function issuesGh(issues: Issue[], beyond: Issue[] = [], opts: { pulls?: number[]; failRead?: () => boolean } = {}): GitHub {
+function issuesGh(issues: Issue[], beyond: Issue[] = [], opts: { pulls?: number[]; failRead?: () => boolean; merged?: Record<number, number> } = {}): GitHub {
   const node = (i: Issue) => ({ number: i.number, title: i.title, url: i.url, createdAt: i.createdAt, updatedAt: i.updatedAt, ...(i.closedAt ? { closedAt: i.closedAt } : {}), author: { login: i.author.login, __typename: 'User' }, labels: { nodes: [] }, comments: { totalCount: 0 } });
   const of = (state: Issue['state']) => ({ nodes: issues.filter((i) => i.state === state).map(node) });
   const byNumber = (query: string) => {
@@ -42,11 +42,21 @@ function issuesGh(issues: Issue[], beyond: Issue[] = [], opts: { pulls?: number[
     const pulls = [...query.matchAll(/p(\d+):pullRequest\(/g)].map(([, n]) => [`p${n}`, opts.pulls?.includes(Number(n)) ? { number: Number(n) } : null] as const);
     return { repository: { ...Object.fromEntries(found.map(([k, i]) => [k, i ? { ...node(i), state: i.state.toUpperCase() } : null])), ...Object.fromEntries(pulls) } };
   };
+  // the merged pr of an issue, which only a read through the issue finds
+  const byIssue = (query: string) => ({
+    repository: Object.fromEntries(
+      [...query.matchAll(/i(\d+):issue\(/g)].map(([, n]) => {
+        const num = opts.merged?.[Number(n)];
+        const nodes = num ? [{ number: num, title: 'merged', url: '', isDraft: false, createdAt: '', updatedAt: '', closedAt: new Date(T0 - 3_600_000).toISOString(), merged: true, author: { login: 'a', __typename: 'User' }, headRefName: `fix/${n}`, headRefOid: '', baseRefName: 'dev', closingIssuesReferences: { nodes: [{ number: Number(n) }] }, comments: { totalCount: 0 }, reviews: { totalCount: 0 } }] : [];
+        return [`i${n}`, { closedByPullRequestsReferences: { nodes } }];
+      }),
+    ),
+  });
   return {
     rates: {},
     conditional: async (path: string) => ({ changed: true, body: path.includes('/actions/runs') ? { workflow_runs: [] } : [] }),
     graphql: async (query: string) =>
-      query.includes('issue(number:') ? byNumber(query) : { repository: { defaultBranchRef: { name: 'dev' }, issues: of('open'), closedIssues: of('closed'), pullRequests: { nodes: [] }, closedPulls: { nodes: [] } } },
+      query.includes('closedByPullRequestsReferences') ? byIssue(query) : query.includes('issue(number:') ? byNumber(query) : { repository: { defaultBranchRef: { name: 'dev' }, issues: of('open'), closedIssues: of('closed'), pullRequests: { nodes: [] }, closedPulls: { nodes: [] } } },
   } as unknown as GitHub;
 }
 
@@ -121,6 +131,20 @@ describe('daemon', () => {
     d.answer(q.id, { text: 'this', by: 'human' });
     expect(lettersFor(d, 'A', 'x').map((l) => l.text.split('\n')[0])).toEqual([`[helm decision ${q.id} answered by human] which`]);
     expect(lettersFor(d, 'A').some((l) => l.text.includes(`decision ${q.id} answered by human`))).toBe(true);
+    await d.stop();
+  });
+
+  it('hands an agent\'s message to the main loop of its own session, not a coordinator live beside it', async () => {
+    const { d } = await daemon();
+    d.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    d.register({ id: 'C', cwd: '/', role: 'coordinator' });
+    d.ledger.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'x' }, 'one');
+    const before = lettersFor(d, 'C').length;
+    d.message({ session: 'A', agent: 'x', to: 'coordinator', text: 'pr 2 has my body\nnot mine to fix' });
+    expect(lettersFor(d, 'A').map((l) => l.text)).toEqual(['[helm message]\nagent x on o/r#1, sent to "coordinator":\n  pr 2 has my body\n  not mine to fix']);
+    expect(lettersFor(d, 'A', 'x')).toEqual([]);
+    expect(lettersFor(d, 'C').length).toBe(before);
+    expect(() => d.message({ session: 'Z', agent: 'x', to: 'coordinator', text: 'lost' })).toThrow('no session Z');
     await d.stop();
   });
 
@@ -447,13 +471,13 @@ describe('daemon', () => {
 
   it('finishes released work on an issue closed past what the snapshot reads, though no close reached helm', async () => {
     const closedAt = iso(T0 - 3_600_000);
-    const { d } = await daemon({ gh: issuesGh([issue(1)], [issue(34, { state: 'closed', closedAt, updatedAt: closedAt }), issue(35)]) });
+    const { d } = await daemon({ gh: issuesGh([issue(1)], [issue(34, { state: 'closed', closedAt, updatedAt: closedAt }), issue(35)], { merged: { 34: 500 } }) });
     d.register({ id: 'A', cwd: '/', repo: 'o/r' });
     d.queue({ session: 'A', repo: 'o/r', issues: [34, 35, 36] });
     for (const n of [34, 35, 36]) d.ledger.release('o/r', n, 'A');
     await d.pollRepo('o/r');
     refreshViews(d);
-    expect(d.ledger.data.work['o/r#34']!.finished).toEqual({ at: Date.parse(closedAt), how: 'closed' });
+    expect(d.ledger.data.work['o/r#34']!.finished).toEqual({ at: Date.parse(closedAt), how: 'merged' });
     const phases = Object.fromEntries(d.workViews().map((v) => [v.issue, v.phase]));
     expect(phases).toEqual({ 34: 'done', 35: 'queued', 36: 'done' });
     expect(d.workViews().find((v) => v.issue === 35)!.issueState).toBe('open');

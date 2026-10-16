@@ -8,6 +8,7 @@ import { HelmClient, HelmError } from '../src/mod/client.ts';
 import { type Install, newestInstall } from '../src/mod/install.ts';
 import { type DispatchPort, dispatchTool, issueAgentName } from '../src/mod/dispatch.ts';
 import { Mailbox } from '../src/mod/mailbox.ts';
+import { sendRoute } from '../src/mod/send.ts';
 import { type Tool, TOOLS } from '../src/mod/tools.ts';
 import { bandRow, isTab, paneRows, type Row, type Self, statusText, type Tab } from '../src/mod/view.ts';
 import { PLUGIN, ROLES, type Runtime, toolEnv } from './runtime.ts';
@@ -22,6 +23,7 @@ const RECONNECT_MS = 3_000;
 // the pane redraws from helmd at most this often, however fast changes come
 const REFRESH_MS = 1_500;
 const PANE = 'helm';
+const isIssueType = (type: string) => type.startsWith(`${PLUGIN}:issue-`);
 
 // the fleet itself stays in the module, since the state contract holds only self-contained data; the atom is the
 // stamp that tells a drawing to read it again
@@ -424,8 +426,23 @@ export const register: Register = (on) => {
   // issue agents start through dispatch, which claims and routes them, so the model never starts one itself. the guard is
   // on the spawn, not the offer: an offer is also asked when a message resumes an agent, and refusing it strands the agent
   on('agent.spawn', ($, e, next) =>
-    e.subagentType.startsWith(`${PLUGIN}:issue-`) && next.origin.plugin !== PLUGIN ? { deny: 'issue agents start through mcp__helm__dispatch, which claims and routes the issue' } : next(e),
+    isIssueType(e.subagentType) && next.origin.plugin !== PLUGIN ? { deny: 'issue agents start through mcp__helm__dispatch, which claims and routes the issue' } : next(e),
   ).catch(($, e, next) => (next.called ? next(e) : { deny: 'the helm spawn guard failed' }));
+
+  // an issue agent answers to the session that dispatched it. the engine resolves a recipient against every session on
+  // the machine, so a send of an issue agent's that names no other agent of this session goes to this session's main
+  // loop through helmd instead, as a letter like any other
+  on('session.send', async ($, e, next) => {
+    const r = rt;
+    if (e.agentId === undefined || !r) return next(e);
+    if (sendRoute(e.to, e.agentId, await $.agent.list(), isIssueType) === 'engine') return next(e);
+    try {
+      await r.client.message({ session: r.session, agent: e.agentId, to: e.to, text: e.text });
+      return { isDelivered: true };
+    } catch (err) {
+      return { isDelivered: false, reason: `helm could not hand this to the session that dispatched you (${(err as Error).message}): put it in your final message instead` };
+    }
+  }).catch(($, e, next) => (next.called ? next(e) : { isDelivered: false, reason: 'the helm send guard failed: put this in your final message instead' }));
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const r = rt;
