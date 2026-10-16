@@ -8,6 +8,11 @@ const ISSUE = `number title url createdAt updatedAt author{login __typename}
       parent{number repository{nameWithOwner}} subIssuesSummary{total completed} issueDependenciesSummary{blockedBy}
       comments(last:1){totalCount nodes{${NOTE}}}`;
 
+// what a merged or closed pr is read with
+const CLOSED_PULL = `number title url isDraft createdAt updatedAt closedAt merged author{login __typename}
+      headRefName headRefOid baseRefName closingIssuesReferences(first:10){nodes{number}}
+      comments{totalCount} reviews{totalCount}`;
+
 export const SNAPSHOT_QUERY = `query($owner:String!,$name:String!){
   repository(owner:$owner,name:$name){
     defaultBranchRef{name}
@@ -32,9 +37,7 @@ export const SNAPSHOT_QUERY = `query($owner:String!,$name:String!){
       }}}}}}
     }}
     closedPulls:pullRequests(states:[MERGED,CLOSED],first:20,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
-      number title url isDraft createdAt updatedAt closedAt merged author{login __typename}
-      headRefName headRefOid baseRefName closingIssuesReferences(first:10){nodes{number}}
-      comments{totalCount} reviews{totalCount}
+      ${CLOSED_PULL}
     }}
   }
 }`;
@@ -260,6 +263,19 @@ export type IssuesRead = { repository: Record<string, (GqlIssue & { state: strin
 
 export function fromIssues(read: IssuesRead): Issue[] {
   return Object.values(read.repository).flatMap((i) => (i ? [issue(i, i.state === 'CLOSED' ? 'closed' : 'open')] : []));
+}
+
+// the prs that close each of the given issues, merged or closed too: each issue is its own alias
+export function pullsQuery(numbers: readonly number[]): string {
+  const parts = numbers.map((n) => `i${n}:issue(number:${n}){closedByPullRequestsReferences(first:10,includeClosedPrs:true){nodes{${CLOSED_PULL}}}}`);
+  return `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){${parts.join(' ')}}}`;
+}
+
+// an issue that could not be read comes back null
+export type PullsRead = { repository: Record<string, { closedByPullRequestsReferences: GqlConnection<GqlPull> } | null> };
+
+export function fromPulls(read: PullsRead): Pull[] {
+  return Object.values(read.repository).flatMap((i) => (i ? i.closedByPullRequestsReferences.nodes.map(pull) : []));
 }
 
 type GqlChild = { number: number; title: string; url: string; state: string; repository: { nameWithOwner: string }; subIssuesSummary?: { total: number; completed: number } };

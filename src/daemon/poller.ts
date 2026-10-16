@@ -1,7 +1,8 @@
 import { isDone, verdictOf } from '../core/checks.ts';
-import type { Child, ForgeState, HelmEvent, Issue, Run } from '../core/types.ts';
+import type { Child, ForgeState, HelmEvent, Issue, Pull, Run } from '../core/types.ts';
 import { type CiMemory, diffForge, emptyMemory } from './events.ts';
-import { type ChildrenRead, childrenQuery, fromChildren, fromIssues, fromJobs, fromRuns, fromSnapshot, type IssuesRead, issuesQuery, type RestJobs, type RestRuns, SNAPSHOT_QUERY, type Snapshot } from './forge.ts';
+import { branchFor, pullFor } from './derive.ts';
+import { type ChildrenRead, childrenQuery, fromChildren, fromIssues, fromJobs, fromPulls, fromRuns, fromSnapshot, type IssuesRead, issuesQuery, type PullsRead, pullsQuery, type RestJobs, type RestRuns, SNAPSHOT_QUERY, type Snapshot } from './forge.ts';
 import type { GitHub } from './github.ts';
 
 export const CACHE_VERSION = 2;
@@ -61,12 +62,15 @@ export class RepoPoller {
     const stale = now - (this.cache.snapshotAt ?? 0) > SNAPSHOT_MAX_AGE_MS;
     let base = prev ? { defaultBranch: prev.defaultBranch, issues: prev.issues, pulls: prev.pulls } : undefined;
     let children = prev?.children ?? {};
+    let fresh = false;
     if (!base || force || items.changed || runsRead.changed || statusPending || stale) {
       base = fromSnapshot(await this.gh.graphql<Snapshot>(SNAPSHOT_QUERY, { owner, name }));
       children = await this.children(base.issues, children, stale || force);
       this.cache.snapshotAt = now;
+      fresh = true;
     }
     base = { ...base, issues: await this.withTracked(base.issues, tracked, prev?.issues ?? []) };
+    base = { ...base, pulls: await this.withTrackedPulls(base.pulls, tracked, prev?.pulls ?? [], fresh) };
     const runs = await this.withJobs(fromRuns(runsRead.body), prev?.runs ?? [], now);
     for (const r of runs) {
       const tag = await this.isTag(r);
@@ -117,6 +121,27 @@ export class RepoPoller {
       const read = await this.gh.graphql<IssuesRead>(issuesQuery(batch), { owner, name }, { partial: true }).catch(() => undefined);
       if (read) out.push(...fromIssues(read));
       else out.push(...batch.flatMap((n) => known.get(n) ?? []));
+    }
+    return out;
+  }
+
+  // the snapshot reads only the latest closed prs, so the merged or closed pr of a tracked issue it misses is read by
+  // the issue. one found stays held (it is final), and an issue with none is looked up again only on a fresh snapshot
+  private async withTrackedPulls(pulls: readonly Pull[], tracked: readonly number[], before: readonly Pull[], fresh: boolean): Promise<Pull[]> {
+    const held = new Set(pulls.map((p) => p.number));
+    const out = [...pulls];
+    const missing: number[] = [];
+    for (const n of new Set(tracked)) {
+      if (pullFor(n, out)) continue;
+      const known = before.filter((p) => p.state !== 'open' && !held.has(p.number) && (p.closes.includes(n) || branchFor(n, p.head)));
+      if (known.length) out.push(...known);
+      else if (fresh) missing.push(n);
+    }
+    const [owner, name] = this.repo.split('/') as [string, string];
+    for (let at = 0; at < missing.length; at += ISSUE_BATCH) {
+      const batch = missing.slice(at, at + ISSUE_BATCH);
+      const read = await this.gh.graphql<PullsRead>(pullsQuery(batch), { owner, name }, { partial: true }).catch(() => undefined);
+      if (read) for (const p of fromPulls(read)) if (!out.some((o) => o.number === p.number)) out.push(p);
     }
     return out;
   }
