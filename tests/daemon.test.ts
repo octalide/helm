@@ -113,6 +113,20 @@ describe('daemon', () => {
     await d.stop();
   });
 
+  it('hands an agent\'s message to the main loop of its own session, not a coordinator live beside it', async () => {
+    const { d } = await daemon();
+    d.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    d.register({ id: 'C', cwd: '/', role: 'coordinator' });
+    d.ledger.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'x' }, 'one');
+    const before = lettersFor(d, 'C').length;
+    d.message({ session: 'A', agent: 'x', to: 'coordinator', text: 'pr 2 has my body\nnot mine to fix' });
+    expect(lettersFor(d, 'A').map((l) => l.text)).toEqual(['[helm message]\nagent x on o/r#1, sent to "coordinator":\n  pr 2 has my body\n  not mine to fix']);
+    expect(lettersFor(d, 'A', 'x')).toEqual([]);
+    expect(lettersFor(d, 'C').length).toBe(before);
+    expect(() => d.message({ session: 'Z', agent: 'x', to: 'coordinator', text: 'lost' })).toThrow('no session Z');
+    await d.stop();
+  });
+
   it('holds back ci on a head other than the one the subscriber waits on', async () => {
     // history runs stale -> old -> pushed -> later, and rebased shares none of it
     const [stale, old, pushed, later, rebased] = ['b', 'a', 'c', 'e', 'd'].map((c) => c.repeat(40)) as [string, string, string, string, string];
