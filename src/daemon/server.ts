@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { extname, join } from 'node:path';
-import type { AnswerBody, ClaimBody, DecisionBody, EscalateBody, Health, HeartbeatBody, OrderBody, QueueBody, RegisterBody, ReleaseBody, ReportBody, RoleBody, SettingsBody, StreamFrame, SubscribeBody } from '../core/protocol.ts';
+import type { AnswerBody, ClaimBody, DecisionBody, EscalateBody, Health, HeartbeatBody, MessageBody, OrderBody, QueueBody, RegisterBody, ReleaseBody, ReportBody, RoleBody, SettingsBody, StreamFrame, SubscribeBody } from '../core/protocol.ts';
 import { PROTOCOL } from '../core/protocol.ts';
 import { type Daemon, SettingsRefused } from './helmd.ts';
 import { ClaimError } from './ledger.ts';
@@ -110,6 +110,15 @@ export function routes(d: Daemon, stop: () => void): Route[] {
       const l = d.ledger.take(params.id!);
       if (!l) throw new HttpError(404, `letter ${params.id} was taken`);
       return l;
+    }),
+    compile('POST', '/v1/messages', async ({ body }) => {
+      const b = (await body()) as MessageBody;
+      need(b?.session && b.agent && typeof b.to === 'string' && b.text, 'session, agent, to and text are required');
+      try {
+        return d.message(b);
+      } catch (e) {
+        throw new HttpError(404, (e as Error).message);
+      }
     }),
     compile('POST', '/v1/subscriptions', async ({ body }) => {
       const b = (await body()) as SubscribeBody;

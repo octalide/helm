@@ -7,6 +7,7 @@ import type {
   EscalateBody,
   Health,
   IssueDetail,
+  MessageBody,
   OrderBody,
   QueueBody,
   RegisterBody,
@@ -82,6 +83,7 @@ export class HelmClient {
       if (e instanceof HelmError && e.status === 404) return undefined;
       throw e;
     });
+  message = (b: MessageBody) => this.call<Letter>('POST', '/v1/messages', b);
   subscribe = (b: SubscribeBody) => this.call<Subscription>('POST', '/v1/subscriptions', b);
   unsubscribe = (id: string) => this.call<{ removed: boolean }>('DELETE', `/v1/subscriptions/${enc(id)}`);
   retire = (session: string, agent: string) => this.call<{ retired: string[] }>('POST', '/v1/subscriptions/retire', { session, agent });

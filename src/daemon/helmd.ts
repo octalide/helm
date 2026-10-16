@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { isDone, verdictOf } from '../core/checks.ts';
 import { type Config, DEFAULT_CONFIG, mergeConfig, repoLayer, RESTART_FIELDS, sourcesOf } from '../core/config.ts';
 import { isRecord } from '../core/decision.ts';
-import type { AnswerBody, Answered, ClaimBody, ConfigView, DecisionBody, EscalateBody, IssueDetail, QueueBody, RegisterBody, ReportBody, SettingsBody, SettingsView, StreamFrame, SubscribeBody } from '../core/protocol.ts';
+import type { AnswerBody, Answered, ClaimBody, ConfigView, DecisionBody, EscalateBody, IssueDetail, MessageBody, QueueBody, RegisterBody, ReportBody, SettingsBody, SettingsView, StreamFrame, SubscribeBody } from '../core/protocol.ts';
 import { PROTOCOL, workKey } from '../core/protocol.ts';
 import type { HelmPaths } from '../core/paths.ts';
 import type { AgentRecord, Decision, Fleet, ForgeState, HelmEvent, Letter, LetterPart, LocalState, Phase, PollStatus, Pull, RepoName, RepoView, Session, SessionRole, Subscription, TreeNode, Work, WorkView } from '../core/types.ts';
@@ -930,6 +930,18 @@ export class Daemon {
     // the recipient has the answer already; the event is for everyone else watching
     this.dispatch([event], live && recipient ? { except: recipient } : {});
     return { decision: d, delivered: Boolean(live) };
+  }
+
+  // a message one of a session's agents sent goes to that session's main loop, the session that dispatched the agent,
+  // whatever the agent addressed it to
+  message(b: MessageBody): Letter {
+    if (!this.ledger.data.sessions[b.session]) throw new Error(`no session ${b.session}`);
+    const w = Object.values(this.ledger.data.work).find((x) => !x.finished && x.owner === b.session && x.agent === b.agent);
+    const lines = [`agent ${b.agent}${w ? ` on ${workKey(w.repo, w.issue)}` : ''}, sent to ${JSON.stringify(b.to)}:`, ...b.text.split('\n').map((l) => `  ${l}`)];
+    const parts: LetterPart[] = [{ head: 'message', lines }];
+    const letter = this.ledger.post({ session: b.session, text: letterText(parts), parts, events: [], subs: [] });
+    this.send(letter);
+    return letter;
   }
 
   stream(session: string, write: (f: StreamFrame) => void): () => void {

@@ -3,7 +3,7 @@ import { compareVersions } from './repo.ts';
 import type { AgentRecord, CiFilter, Decision, DecisionKind, Effort, Letter, PlanStep, ReportState, RepoName, Routing, Scope, SessionRole, Tier, Until } from './types.ts';
 
 // bumped when a route or a body changes shape; a mod that finds an older daemon replaces it
-export const PROTOCOL = 3;
+export const PROTOCOL = 4;
 
 export type Health = { version: string; protocol: number; pid: number; startedAt: number; web?: string };
 
@@ -72,6 +72,9 @@ export type DecisionBody = {
   blocking: boolean;
   from?: { session: string; agent?: string };
 };
+
+// a message an agent of session sent to: helmd hands it to that session's main loop, whatever to names
+export type MessageBody = { session: string; agent: string; to: string; text: string };
 
 export type AnswerBody = { text: string; option?: string; by: string };
 
