@@ -304,9 +304,12 @@ describe('phase', () => {
     expect(phaseOf({ ...a, report: { state: 'waiting', at: T0 } }, { agent: 'completed', pull: pull(101, { draft: true }), blocking: false, issueClosed: false })).toBe('draft');
     expect(phaseOf(a, { agent: 'gone', blocking: false, issueClosed: false })).toBe('stalled');
     // its pr head settled ci that its subscription held back: the delivery can no longer come
+    const draft = pull(101, { draft: true, checks: [check('t', 'success')] });
+    expect(phaseOf({ ...a, report: { state: 'waiting', at: T0 } }, { agent: 'idle', pull: draft, blocking: false, issueClosed: false, stuck: true })).toBe('stalled');
+    expect(phaseOf({ ...a, report: { state: 'waiting', at: T0 } }, { agent: 'running', pull: draft, blocking: false, issueClosed: false, stuck: true })).toBe('draft');
+    // a green pr out of draft waits only on its merge, whoever is left on it
     const green = pull(101, { checks: [check('t', 'success')] });
-    expect(phaseOf({ ...a, report: { state: 'waiting', at: T0 } }, { agent: 'idle', pull: green, blocking: false, issueClosed: false, stuck: true })).toBe('stalled');
-    expect(phaseOf({ ...a, report: { state: 'waiting', at: T0 } }, { agent: 'running', pull: green, blocking: false, issueClosed: false, stuck: true })).toBe('ready');
+    for (const agent of ['idle', 'completed', 'gone'] as const) expect(phaseOf({ ...a, report: { state: 'ready', at: T0 } }, { agent, pull: green, blocking: false, issueClosed: false, stuck: true })).toBe('ready');
   });
 
   it('counts a live session working an issue itself as its worker', () => {
