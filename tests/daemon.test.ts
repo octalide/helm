@@ -194,7 +194,7 @@ describe('daemon', () => {
       return '';
     };
     const green = [check('test', 'success')];
-    const pulls = [pull(160, { sha: theirs, head: 'fix/160', checks: green }), pull(161, { sha: gone, head: 'fix/161', checks: green }), pull(162, { sha: unrelated, head: 'fix/162', checks: green })];
+    const pulls = [pull(160, { sha: theirs, head: 'fix/160', checks: green }), pull(161, { sha: gone, head: 'fix/161', checks: green }), pull(162, { sha: unrelated, head: 'fix/162', checks: green, draft: true })];
     const { d } = await daemon({
       gh: offline,
       git,
@@ -220,7 +220,7 @@ describe('daemon', () => {
     d.ledger.heartbeat('A', [{ id: 'unrelated', type: 'issue', description: '', status: 'idle' }]);
     d.ledger.report({ session: 'A', agent: 'unrelated', repo: 'o/r', issue: 162, state: 'waiting' });
     const phase = () => d.workViews().find((v) => v.issue === 162)?.phase;
-    expect(phase()).toBe('ready');
+    expect(phase()).toBe('draft');
     d.ledger.reviewHeld('o/r', (n) => pulls.find((p) => p.number === n)?.sha);
     expect(d.ledger.data.subscriptions[held.id]?.held).toEqual({ sha: unrelated, seen: true });
     expect(phase()).toBe('stalled');
