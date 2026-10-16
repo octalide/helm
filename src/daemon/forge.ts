@@ -2,14 +2,17 @@ import type { Author, Check, CheckState, Child, Issue, Job, Note, Pull, Run, Ste
 
 const NOTE = 'author{login __typename} createdAt url bodyText';
 
+// what an open issue is read with
+const ISSUE = `number title url createdAt updatedAt author{login __typename}
+      labels(first:20){nodes{name}} assignees(first:5){nodes{login}}
+      parent{number repository{nameWithOwner}} subIssuesSummary{total completed} issueDependenciesSummary{blockedBy}
+      comments(last:1){totalCount nodes{${NOTE}}}`;
+
 export const SNAPSHOT_QUERY = `query($owner:String!,$name:String!){
   repository(owner:$owner,name:$name){
     defaultBranchRef{name}
     issues(states:OPEN,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
-      number title url createdAt updatedAt author{login __typename}
-      labels(first:20){nodes{name}} assignees(first:5){nodes{login}}
-      parent{number repository{nameWithOwner}} subIssuesSummary{total completed} issueDependenciesSummary{blockedBy}
-      comments(last:1){totalCount nodes{${NOTE}}}
+      ${ISSUE}
     }}
     closedIssues:issues(states:CLOSED,first:20,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
       number title url createdAt updatedAt closedAt stateReason author{login __typename}
@@ -244,6 +247,19 @@ type RestRun = {
 export function childrenQuery(numbers: readonly number[]): string {
   const parts = numbers.map((n) => `i${n}:issue(number:${n}){subIssues(first:100){nodes{number title url state repository{nameWithOwner} subIssuesSummary{total completed}}}}`);
   return `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){${parts.join(' ')}}}`;
+}
+
+// the given issues by number, in one query, open or closed: each issue is its own alias
+export function issuesQuery(numbers: readonly number[]): string {
+  const parts = numbers.map((n) => `i${n}:issue(number:${n}){${ISSUE} state closedAt stateReason}`);
+  return `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){${parts.join(' ')}}}`;
+}
+
+// an issue that could not be read, deleted or never one, comes back null
+export type IssuesRead = { repository: Record<string, (GqlIssue & { state: string }) | null> };
+
+export function fromIssues(read: IssuesRead): Issue[] {
+  return Object.values(read.repository).flatMap((i) => (i ? [issue(i, i.state === 'CLOSED' ? 'closed' : 'open')] : []));
 }
 
 type GqlChild = { number: number; title: string; url: string; state: string; repository: { nameWithOwner: string }; subIssuesSummary?: { total: number; completed: number } };
