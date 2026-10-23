@@ -309,7 +309,9 @@ describe('daemon', () => {
     d.heartbeat('A', [agent('y', 'running')]);
     expect(phase()).toBe('working');
 
-    // a late stopped from a replaced agent is refused and changes nothing
+    // a live agent keeps its work from a dispatch, and once it ended, a late stopped from it is refused and changes nothing
+    expect(() => d.ledger.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'z' }, 'one')).toThrow(/held by live agent y/);
+    d.heartbeat('A', [agent('y', 'completed')]);
     d.ledger.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'z' }, 'one');
     const wait2 = wait('z');
     expect(() => d.report({ session: 'A', agent: 'y', repo: 'o/r', issue: 1, state: 'stopped' })).toThrow(/agent z holds it/);
@@ -525,17 +527,20 @@ describe('daemon', () => {
     await again.stop();
   });
 
-  it('finishes released work on an issue closed past what the snapshot reads, though no close reached helm', async () => {
+  it('finishes released work on an issue closed past what the snapshot reads, and reopens one the forge shows open', async () => {
     const closedAt = iso(T0 - 3_600_000);
-    const { d } = await daemon({ gh: issuesGh([issue(1)], [issue(34, { state: 'closed', closedAt, updatedAt: closedAt }), issue(35)], { merged: { 34: 500 } }) });
+    const { d } = await daemon({ gh: issuesGh([issue(1), issue(37)], [issue(34, { state: 'closed', closedAt, updatedAt: closedAt }), issue(35)], { merged: { 34: 500 } }) });
     d.register({ id: 'A', cwd: '/', repo: 'o/r' });
-    d.queue({ session: 'A', repo: 'o/r', issues: [34, 35, 36] });
-    for (const n of [34, 35, 36]) d.ledger.release('o/r', n, 'A');
+    d.queue({ session: 'A', repo: 'o/r', issues: [34, 35, 36, 37] });
+    for (const n of [34, 35, 36, 37]) d.ledger.release('o/r', n, 'A');
+    // finished by a merge that never closed its issue: the forge shows it open, so it is open again
+    d.ledger.finish('o/r', 37, 'merged');
     await d.pollRepo('o/r');
     refreshViews(d);
     expect(d.ledger.data.work['o/r#34']!.finished).toEqual({ at: Date.parse(closedAt), how: 'merged' });
+    expect(d.ledger.data.work['o/r#37']!.finished).toBeUndefined();
     const phases = Object.fromEntries(d.workViews().map((v) => [v.issue, v.phase]));
-    expect(phases).toEqual({ 34: 'done', 35: 'queued', 36: 'done' });
+    expect(phases).toEqual({ 34: 'done', 35: 'queued', 36: 'done', 37: 'queued' });
     expect(d.workViews().find((v) => v.issue === 35)!.issueState).toBe('open');
     expect(d.ledger.data.work['o/r#36']!.finished!.how).toBe('gone');
     await d.stop();

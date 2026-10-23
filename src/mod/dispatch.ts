@@ -82,7 +82,7 @@ export function dispatchTool(): Tool<DispatchPort> {
     eager: true,
     mainOnly: true,
     description:
-      'Start an issue agent on each issue, the only way to start one. Claims the issue for this session, routes it to a tier of model and effort (the routing judge reads the issue unless you name a tier, and every pick is logged for the person to review or override), and spawns the agent in the background. The agent resumes an existing branch and PR when there is one. Its progress arrives as work deliveries, and its final report arrives when it ends.',
+      'Start an issue agent on each issue, the only way to start one. Claims the issue for this session, routes it to a tier of model and effort (the routing judge reads the issue unless you name a tier, and every pick is logged for the person to review or override), and spawns the agent in the background. The agent resumes an existing branch and PR when there is one. An issue a live agent still holds is refused, naming that agent: wait for it to end, message it, or release the issue first. Its progress arrives as work deliveries, and its final report arrives when it ends.',
     inputSchema: {
       type: 'object',
       properties: {
