@@ -47,6 +47,8 @@ export function buildTree(forges: readonly ForgeState[], work: readonly WorkView
   }
   const works = new Map<string, WorkView>();
   for (const w of work) {
+    // abandoned work let its issue go back to the backlog, so it says nothing of where the issue stands
+    if (w.finished?.how === 'abandoned') continue;
     const k = keyOf(w.repo, w.issue);
     const had = works.get(k);
     if (!had || had.queuedAt < w.queuedAt) works.set(k, w);
