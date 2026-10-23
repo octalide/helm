@@ -346,12 +346,6 @@ export class Daemon {
     for (const e of events) {
       // an issue closed by its merged pr finished as merged, whichever of the two events comes first
       if (e.kind === 'issue' && e.issue !== undefined && e.tags.includes('closed')) this.ledger.finish(repo, e.issue, forge && pullFor(e.issue, forge.pulls)?.state === 'merged' ? 'merged' : 'closed');
-      if (e.kind === 'pr' && e.pr !== undefined && e.tags.includes('merged')) {
-        const pull = forge?.pulls.find((p) => p.number === e.pr);
-        for (const w of Object.values(this.ledger.data.work)) {
-          if (w.repo === repo && !w.finished && pull && pullFor(w.issue, [pull])) this.ledger.finish(repo, w.issue, 'merged');
-        }
-      }
       if (e.kind === 'ci' && e.pr !== undefined) {
         if (e.tags.includes('stalled')) {
           const raised = this.ledger.raise(`stall:ci:${repo}#${e.pr}`, `head ${e.sha ?? ''}`, { kind: 'stall', repo, title: `CI stalled on pr #${e.pr}`, body: [e.text, ...(e.detail ?? []), e.url ?? ''].join('\n'), blocking: false, ...this.prIssue(repo, e.pr) });
@@ -476,8 +470,10 @@ export class Daemon {
       const key = workKey(v.repo, v.issue);
       next.set(key, v.phase);
       this.ledger.phase(v.repo, v.issue, v.phase);
-      // done by what the forge says, though no close or merge event reached helm: a poll that only seeded saw it
+      // done by what the forge says, though no close event reached helm: a poll that only seeded saw it
       if (v.phase === 'done' && !v.finished) this.finishLate(v);
+      // finished by the forge, whose issue is open again: reopened, or finished by a merge that never closed it
+      if ((v.finished?.how === 'merged' || v.finished?.how === 'closed') && v.issueState === 'open') this.ledger.reopen(v.repo, v.issue);
       const was = before.get(key);
       const stallKey = `stall:work:${key}`;
       if (v.phase === 'stalled') {

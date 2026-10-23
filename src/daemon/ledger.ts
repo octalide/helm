@@ -628,6 +628,16 @@ export class Ledger {
     return w;
   }
 
+  // the forge shows open an issue whose work it had finished
+  reopen(repo: string, issue: number): Work | undefined {
+    const w = this.data.work[workKey(repo, issue)];
+    if (!w?.finished) return undefined;
+    delete w.finished;
+    w.updatedAt = this.now();
+    this.changed();
+    return w;
+  }
+
   decide(b: DecisionBody & { key?: string; condition?: string }): Decision {
     const now = this.now();
     const to = this.audience(b);

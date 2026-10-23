@@ -333,7 +333,9 @@ describe('phase', () => {
     expect(phaseOf(a, { agent: 'running', pull: pull(101, { checks: [check('t', 'running')] }), blocking: false, issueClosed: false })).toBe('ci');
     expect(phaseOf(a, { agent: 'running', pull: pull(101, { checks: [check('t', 'failure')] }), blocking: false, issueClosed: false })).toBe('failing');
     expect(phaseOf(a, { agent: 'completed', pull: pull(101, { checks: [check('t', 'success')] }), blocking: false, issueClosed: false })).toBe('ready');
-    expect(phaseOf(a, { pull: pull(101, { state: 'merged' }), blocking: false, issueClosed: false })).toBe('done');
+    // a merged pr that leaves its issue open finishes nothing: the issue's close does
+    expect(phaseOf(a, { pull: pull(101, { state: 'merged' }), blocking: false, issueClosed: false })).toBe('stalled');
+    expect(phaseOf(a, { pull: pull(101, { state: 'merged' }), blocking: false, issueClosed: true })).toBe('done');
   });
 
   it('counts an agent waiting on a delivery as on the work, and a vanished one as stalled', () => {
