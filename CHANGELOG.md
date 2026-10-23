@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.0
+
+Sessions need `/reload-plugins` to take the new mod, and the first session to reload replaces helmd with 0.10.0. The protocol stays at 4 and the ledger at version 6.
+
+- An issue a live agent holds can no longer be taken by another agent. A claim from any other agent, a dispatch included, is refused and names the holder, so dispatch never resumes a branch while its agent is still writing it. A subagent of the holder, traced through its session's agent list, claims and reports as the holder, so another agent ending no longer reads as the issue agent gone. To replace a live agent, release the issue first (#126).
+- A merged pr no longer finishes its issue's work: the issue's close does. Work helm finished whose issue GitHub shows open again is reopened, and abandoned work leaves its open issue unowned in the tree rather than done (#125).
+- A claude process in a watched checkout that never registered, such as one waiting in the resume picker, is listed with its repository's "no live repo session" entry in `view fleet`, the coordinator's pane and the web overview (#123).
+
 ## 0.9.0
 
 Sessions need `/reload-plugins`: the protocol moves to 4. A session on an older mod is told so and keeps using helmd. The ledger moves to version 6. helmd migrates it on start, and a 0.8.x helmd does not read it after.
