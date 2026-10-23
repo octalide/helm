@@ -1,4 +1,6 @@
-import { readdir, readFile, readlink } from 'node:fs/promises';
+import { readdir, readFile, readlink, realpath } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { Leftover } from '../core/types.ts';
 
 // what the scan reads of a process table: linux /proc by default, stubbed in tests
@@ -49,6 +51,43 @@ export async function still(listed: readonly Leftover[], dir: string | undefined
     const cwd = await table.cwd(p.pid);
     if (cwd === undefined || (dir !== undefined && !inside(dir, cwd))) continue;
     if ((await table.command(p.pid)) === p.command) out.push(p);
+  }
+  return out;
+}
+
+// an interactive claude process as its own session file tells it: claude keeps one per process, <pid>.json under
+// its config directory's sessions/, naming the conversation it is in (a fresh id until one is picked or started)
+export type ClaudeProcess = { pid: number; session: string; cwd: string; startedAt?: number };
+
+export type ClaudeProcesses = () => Promise<ClaudeProcess[]>;
+
+export const claudeSessionsDir = (env: NodeJS.ProcessEnv = process.env): string => join(env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'sessions');
+
+// the session files in a directory, live or not; a print or sdk run is no session a person waits on, and is left out
+export const claudeProcesses = (dir = claudeSessionsDir()): ClaudeProcesses => async () => {
+  const out: ClaudeProcess[] = [];
+  for (const name of await readdir(dir).catch(() => [] as string[])) {
+    if (!/^\d+\.json$/.test(name)) continue;
+    const raw = await readFile(join(dir, name), 'utf8').catch(() => undefined);
+    let f: { pid?: unknown; sessionId?: unknown; cwd?: unknown; kind?: unknown; startedAt?: unknown };
+    try {
+      f = raw === undefined ? {} : JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    if (typeof f.pid !== 'number' || typeof f.sessionId !== 'string' || typeof f.cwd !== 'string' || f.kind !== 'interactive') continue;
+    out.push({ pid: f.pid, session: f.sessionId, cwd: f.cwd, ...(typeof f.startedAt === 'number' ? { startedAt: f.startedAt } : {}) });
+  }
+  return out.sort((a, b) => a.pid - b.pid);
+};
+
+// the claude processes still running where their file says, so a file left behind by one that died, or a pid taken
+// by another process since, is not read as live. the table names a directory with its links resolved
+export async function running(found: readonly ClaudeProcess[], table: ProcTable = procfs()): Promise<ClaudeProcess[]> {
+  const out: ClaudeProcess[] = [];
+  for (const p of found) {
+    const cwd = await table.cwd(p.pid);
+    if (cwd !== undefined && (cwd === p.cwd || cwd === (await realpath(p.cwd).catch(() => p.cwd)))) out.push(p);
   }
   return out;
 }
