@@ -309,7 +309,9 @@ describe('daemon', () => {
     d.heartbeat('A', [agent('y', 'running')]);
     expect(phase()).toBe('working');
 
-    // a late stopped from a replaced agent is refused and changes nothing
+    // a live agent keeps its work from a dispatch, and once it ended, a late stopped from it is refused and changes nothing
+    expect(() => d.ledger.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'z' }, 'one')).toThrow(/held by live agent y/);
+    d.heartbeat('A', [agent('y', 'completed')]);
     d.ledger.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'z' }, 'one');
     const wait2 = wait('z');
     expect(() => d.report({ session: 'A', agent: 'y', repo: 'o/r', issue: 1, state: 'stopped' })).toThrow(/agent z holds it/);
