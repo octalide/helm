@@ -18,6 +18,8 @@ export function pullFor(issue: number, pulls: readonly Pull[]): Pull | undefined
 
 const LIVE: ReadonlySet<AgentStatus> = new Set(['pending', 'running', 'waiting', 'idle']);
 
+export const liveStatus = (s: AgentStatus | undefined): s is AgentStatus => s !== undefined && LIVE.has(s);
+
 // a session lists a new agent with its next heartbeat; until then a fresh claim counts as running
 const CLAIM_GRACE_MS = 90_000;
 
@@ -49,7 +51,7 @@ type PhaseContext = { pull?: Pull; agent?: AgentStatus; ownerLive?: boolean; blo
 // whether anything is on the work itself: a live agent, one that ended its turn to wait on a delivery that can still
 // come, or a live session working it itself
 export function activeOf(w: Work, ctx: PhaseContext): boolean {
-  const live = ctx.agent !== undefined && LIVE.has(ctx.agent) && !(ctx.stuck && RESTING.has(ctx.agent));
+  const live = liveStatus(ctx.agent) && !(ctx.stuck && RESTING.has(ctx.agent));
   // an agent that came with adopted work is gone with its session, so what it waited on reaches it no more
   return live || (w.report?.state === 'waiting' && !ctx.stuck && !inherited(w)) || (selfWorked(w) && ctx.ownerLive === true);
 }
@@ -57,7 +59,8 @@ export function activeOf(w: Work, ctx: PhaseContext): boolean {
 // stuck: the work's pr subscription held back ci its pr head settled, and a later poll still saw that head.
 // carried: another work item on the same open pr has someone on it, so this one moves with that pr
 export function phaseOf(w: Work, ctx: PhaseContext): Phase {
-  if (w.finished || ctx.issueClosed || ctx.pull?.state === 'merged') return 'done';
+  // a merged pr alone finishes nothing: an issue worked over several prs stays open, and done follows its close
+  if (w.finished || ctx.issueClosed) return 'done';
   if (ctx.blocking || w.report?.state === 'blocked') return 'blocked';
   // its worker stopped on purpose: set aside until a dispatch, a working report or a resume picks it up again
   if (w.report?.state === 'stopped') return 'parked';

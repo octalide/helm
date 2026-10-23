@@ -1,4 +1,7 @@
 import { readFileSync } from 'node:fs';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { mergeConfig, DEFAULT_CONFIG } from '../src/core/config.ts';
 import { trimLog } from '../src/daemon/helmd.ts';
@@ -6,7 +9,7 @@ import { repoOfRemote } from '../src/core/repo.ts';
 import { parseBranches, parseStatus, parseWorktrees } from '../src/daemon/local.ts';
 import { daemonAction, PROTOCOL } from '../src/core/protocol.ts';
 import { type Install, installOf, newestInstall } from '../src/mod/install.ts';
-import { leftovers } from '../src/daemon/procs.ts';
+import { claudeProcesses, leftovers, running } from '../src/daemon/procs.ts';
 import { table } from './fixtures.ts';
 
 describe('local git parsing', () => {
@@ -60,6 +63,18 @@ describe('config and logs', () => {
       { pid: 10, command: 'bash -c until [ -s out.log ]; do :; done' },
       { pid: 11, command: 'node serve.js' },
     ]);
+  });
+
+  it('reads the interactive claude processes from their session files, and keeps those still running where they say', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'helm-claude-'));
+    const file = (pid: number, over: object) => writeFile(join(dir, `${pid}.json`), JSON.stringify({ pid, sessionId: `s${pid}`, cwd: '/r', kind: 'interactive', startedAt: 5, ...over }));
+    await Promise.all([file(1, {}), file(2, { kind: 'print' }), file(3, { cwd: '/q' }), file(4, {}), writeFile(join(dir, '5.json'), '{'), writeFile(join(dir, '1.abc.key'), '{}')]);
+    const found = await claudeProcesses(dir)();
+    expect(found.map((p) => p.pid)).toEqual([1, 3, 4]);
+    expect(found[0]).toEqual({ pid: 1, session: 's1', cwd: '/r', startedAt: 5 });
+    // 3 moved, 4 is gone and its file left behind
+    expect((await running(found, table({ 1: ['/r', 'claude'], 3: ['/r', 'claude'] }))).map((p) => p.pid)).toEqual([1]);
+    await rm(dir, { recursive: true, force: true });
   });
 });
 

@@ -7,7 +7,7 @@ import { isRecord } from '../core/decision.ts';
 import type { AnswerBody, Answered, ClaimBody, ConfigView, DecisionBody, EscalateBody, IssueDetail, MessageBody, QueueBody, RegisterBody, ReportBody, SettingsBody, SettingsView, StreamFrame, SubscribeBody } from '../core/protocol.ts';
 import { PROTOCOL, workKey } from '../core/protocol.ts';
 import type { HelmPaths } from '../core/paths.ts';
-import type { AgentRecord, Decision, Fleet, ForgeState, HelmEvent, Letter, LetterPart, LocalState, Phase, PollStatus, Pull, RepoName, RepoView, Session, SessionRole, Subscription, TreeNode, Work, WorkView } from '../core/types.ts';
+import type { AgentRecord, Decision, Fleet, ForgeState, HelmEvent, Letter, LetterPart, LocalState, Phase, PollStatus, Pull, RepoName, RepoView, Session, SessionRole, Subscription, TreeNode, Waiting, Work, WorkView } from '../core/types.ts';
 import { letterText } from '../core/letter.ts';
 import { route } from './deliver.ts';
 import { ATTENTION, buildTree } from '../core/tree.ts';
@@ -19,7 +19,7 @@ import type { GitHub } from './github.ts';
 import { type Adoption, emptyLedger, type GiveBack, Ledger, type LedgerData } from './ledger.ts';
 import { discover, type Git, git as realGit, scan } from './local.ts';
 import { readJson, Saver, writeJson } from './persist.ts';
-import { leftovers, type ProcTable, procfs, still } from './procs.ts';
+import { claudeProcesses, type ClaudeProcesses, inside, leftovers, type ProcTable, procfs, running, still } from './procs.ts';
 import { emptyCache, type RepoCache, RepoPoller } from './poller.ts';
 import { unownedDue, unownedEvent } from './unowned.ts';
 import { ended, heldKey, expired, type MatchContext } from './watch.ts';
@@ -35,6 +35,8 @@ export type DaemonDeps = {
   // off in tests, which drive polls by hand
   loops?: boolean;
   procs?: ProcTable;
+  // the session files of claude processes on this machine
+  claude?: ClaudeProcesses;
   // told of every config applied after start, for what lives outside the daemon such as the web listener
   onConfig?: (next: Config, prev: Config) => void;
 };
@@ -77,6 +79,8 @@ const DISCOVER_MS = 10 * 60_000;
 // below this many calls left in a pool, every poll waits for the window to reset
 const RATE_FLOOR = 150;
 const LOG_TAIL = 200;
+// a claude process starting up registers within this long; one still unregistered past it is waiting on input
+const WAITING_MS = 60_000;
 
 const SHA = /^[0-9a-f]{7,40}$/i;
 // a commit id and one of its abbreviations name the same commit
@@ -96,6 +100,9 @@ export class Daemon {
   private readonly log: (line: string) => void;
   private readonly git: Git;
   private readonly procs: ProcTable;
+  private readonly claude: ClaudeProcesses;
+  // by repository, the claude processes in its checkouts that never registered, as the last local scan found them
+  private waiting = new Map<RepoName, Waiting[]>();
   private readonly loops: boolean;
   private readonly onConfig: (next: Config, prev: Config) => void;
   private readonly pollers = new Map<RepoName, RepoPoller>();
@@ -128,6 +135,7 @@ export class Daemon {
     this.log = deps.log ?? (() => {});
     this.git = deps.git ?? realGit;
     this.procs = deps.procs ?? procfs();
+    this.claude = deps.claude ?? claudeProcesses();
     this.loops = deps.loops ?? true;
     this.onConfig = deps.onConfig ?? (() => {});
     this.startedAt = this.now();
@@ -317,6 +325,7 @@ export class Daemon {
         this.local.set(repo, next);
       }
       await this.recheckLeftovers();
+      if (await this.scanWaiting()) moved = true;
       if (moved) this.changed();
     } catch (error) {
       this.log(`local scan failed: ${(error as Error).message}`);
@@ -346,12 +355,6 @@ export class Daemon {
     for (const e of events) {
       // an issue closed by its merged pr finished as merged, whichever of the two events comes first
       if (e.kind === 'issue' && e.issue !== undefined && e.tags.includes('closed')) this.ledger.finish(repo, e.issue, forge && pullFor(e.issue, forge.pulls)?.state === 'merged' ? 'merged' : 'closed');
-      if (e.kind === 'pr' && e.pr !== undefined && e.tags.includes('merged')) {
-        const pull = forge?.pulls.find((p) => p.number === e.pr);
-        for (const w of Object.values(this.ledger.data.work)) {
-          if (w.repo === repo && !w.finished && pull && pullFor(w.issue, [pull])) this.ledger.finish(repo, w.issue, 'merged');
-        }
-      }
       if (e.kind === 'ci' && e.pr !== undefined) {
         if (e.tags.includes('stalled')) {
           const raised = this.ledger.raise(`stall:ci:${repo}#${e.pr}`, `head ${e.sha ?? ''}`, { kind: 'stall', repo, title: `CI stalled on pr #${e.pr}`, body: [e.text, ...(e.detail ?? []), e.url ?? ''].join('\n'), blocking: false, ...this.prIssue(repo, e.pr) });
@@ -476,8 +479,10 @@ export class Daemon {
       const key = workKey(v.repo, v.issue);
       next.set(key, v.phase);
       this.ledger.phase(v.repo, v.issue, v.phase);
-      // done by what the forge says, though no close or merge event reached helm: a poll that only seeded saw it
+      // done by what the forge says, though no close event reached helm: a poll that only seeded saw it
       if (v.phase === 'done' && !v.finished) this.finishLate(v);
+      // finished by the forge, whose issue is open again: reopened, or finished by a merge that never closed it
+      if ((v.finished?.how === 'merged' || v.finished?.how === 'closed') && v.issueState === 'open') this.ledger.reopen(v.repo, v.issue);
       const was = before.get(key);
       const stallKey = `stall:work:${key}`;
       if (v.phase === 'stalled') {
@@ -552,7 +557,7 @@ export class Daemon {
     return {
       version: this.version,
       sessions: Object.values(d.sessions).sort((a, b) => b.seenAt - a.seenAt),
-      unattended: this.ledger.unattended(),
+      unattended: this.ledger.unattended(this.waiting),
       // a pane has no use for work finished before today
       work: lite ? work.filter((w) => !w.finished || this.now() - w.finished.at < LITE_DONE_MS) : work,
       tree: this.tree(work),
@@ -696,6 +701,25 @@ export class Daemon {
     }
     for (const [agent, was] of before) if (LOOPING.has(was) && !agents.some((a) => a.id === agent)) void this.agentEnded(id, agent);
     return s;
+  }
+
+  // the claude processes in a watched repository's checkouts that are not a live session helm knows, past the time one
+  // takes to register: a session waiting on input before its conversation starts. true when the set changed
+  async scanWaiting(): Promise<boolean> {
+    const now = this.now();
+    const dirs: [string, RepoName][] = [];
+    for (const repo of this.watched()) for (const dir of [...(this.checkouts.get(repo) ?? []), ...(this.local.get(repo)?.worktrees.map((w) => w.path) ?? [])]) dirs.push([dir, repo]);
+    // the deepest checkout holding a directory is its own, for a checkout nested inside another
+    dirs.sort((a, b) => b[0].length - a[0].length);
+    const next = new Map<RepoName, Waiting[]>();
+    for (const p of await running(await this.claude(), this.procs)) {
+      if (this.ledger.live(p.session) || (p.startedAt !== undefined && now - p.startedAt < WAITING_MS)) continue;
+      const repo = dirs.find(([dir]) => inside(dir, p.cwd))?.[1];
+      if (repo) next.set(repo, [...(next.get(repo) ?? []), { pid: p.pid, cwd: p.cwd, ...(p.startedAt !== undefined ? { since: p.startedAt } : {}) }]);
+    }
+    const moved = JSON.stringify([...next].sort()) !== JSON.stringify([...this.waiting].sort());
+    this.waiting = next;
+    return moved;
   }
 
   // a leftover that has exited, or moved out of the worktree, is no longer reported

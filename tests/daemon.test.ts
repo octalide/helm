@@ -309,7 +309,9 @@ describe('daemon', () => {
     d.heartbeat('A', [agent('y', 'running')]);
     expect(phase()).toBe('working');
 
-    // a late stopped from a replaced agent is refused and changes nothing
+    // a live agent keeps its work from a dispatch, and once it ended, a late stopped from it is refused and changes nothing
+    expect(() => d.ledger.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'z' }, 'one')).toThrow(/held by live agent y/);
+    d.heartbeat('A', [agent('y', 'completed')]);
     d.ledger.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'z' }, 'one');
     const wait2 = wait('z');
     expect(() => d.report({ session: 'A', agent: 'y', repo: 'o/r', issue: 1, state: 'stopped' })).toThrow(/agent z holds it/);
@@ -452,6 +454,40 @@ describe('daemon', () => {
     await d.stop();
   });
 
+  it('lists a claude process in a checkout that never registered on its repository, once past its start', async () => {
+    let now = T0;
+    const home = await mkdtemp(join(tmpdir(), 'helm-test-'));
+    dirs.push(home);
+    const repo = join(home, 'src', 'r');
+    await mkdir(join(repo, '.git'), { recursive: true });
+    const git = async (_cwd: string, args: string[]) => (args[0] === 'config' ? 'git@github.com:o/r.git' : args[0] === 'worktree' ? `worktree ${repo}\nHEAD a\nbranch refs/heads/dev\n` : '');
+    const gh = { rates: {}, conditional: async () => Promise.reject(new Error('offline')) } as unknown as GitHub;
+    const procs = table({ 50: [repo, 'claude --resume m'], 51: [join(repo, 'web'), 'claude'], 52: ['/elsewhere', 'claude'] });
+    const claude = async () => [
+      { pid: 50, session: 'P', cwd: repo, startedAt: T0 },
+      { pid: 51, session: 'A', cwd: join(repo, 'web'), startedAt: T0 },
+      { pid: 52, session: 'Q', cwd: '/elsewhere', startedAt: T0 },
+    ];
+    const d = new Daemon({ paths: helmPaths({ HOME: home, HELM_HOME: home }), config: { ...DEFAULT_CONFIG, roots: [join(home, 'src')] }, gh, version: '0', now: () => now, loops: false, git, procs, claude });
+    await d.start();
+    d.register({ id: 'A', cwd: repo, repo: 'o/r', protocol: 3 });
+    await d.ask('o/r');
+    d.endSession('A');
+    // just started, it may yet register
+    await d.scanWaiting();
+    expect(d.fleet().unattended).toEqual([{ repo: 'o/r', open: 0, last: { session: 'A', seenAt: T0 } }]);
+    now += 120_000;
+    expect(await d.scanWaiting()).toBe(true);
+    expect(d.fleet().unattended[0]?.waiting).toEqual([{ pid: 50, cwd: repo, since: T0 }, { pid: 51, cwd: join(repo, 'web'), since: T0 }]);
+    // a live repo session there leaves nothing to list, and a process that registered is no longer waiting
+    d.register({ id: 'A', cwd: repo, repo: 'o/r', protocol: 3 });
+    await d.scanWaiting();
+    expect(d.fleet().unattended).toEqual([]);
+    d.endSession('A');
+    expect(d.fleet().unattended[0]?.waiting).toEqual([{ pid: 50, cwd: repo, since: T0 }]);
+    await d.stop();
+  });
+
   it('tells the fleet once of an issue nobody owns 30 minutes after it opened, and of none it already had', async () => {
     let now = T0;
     const clock = () => now;
@@ -491,17 +527,20 @@ describe('daemon', () => {
     await again.stop();
   });
 
-  it('finishes released work on an issue closed past what the snapshot reads, though no close reached helm', async () => {
+  it('finishes released work on an issue closed past what the snapshot reads, and reopens one the forge shows open', async () => {
     const closedAt = iso(T0 - 3_600_000);
-    const { d } = await daemon({ gh: issuesGh([issue(1)], [issue(34, { state: 'closed', closedAt, updatedAt: closedAt }), issue(35)], { merged: { 34: 500 } }) });
+    const { d } = await daemon({ gh: issuesGh([issue(1), issue(37)], [issue(34, { state: 'closed', closedAt, updatedAt: closedAt }), issue(35)], { merged: { 34: 500 } }) });
     d.register({ id: 'A', cwd: '/', repo: 'o/r' });
-    d.queue({ session: 'A', repo: 'o/r', issues: [34, 35, 36] });
-    for (const n of [34, 35, 36]) d.ledger.release('o/r', n, 'A');
+    d.queue({ session: 'A', repo: 'o/r', issues: [34, 35, 36, 37] });
+    for (const n of [34, 35, 36, 37]) d.ledger.release('o/r', n, 'A');
+    // finished by a merge that never closed its issue: the forge shows it open, so it is open again
+    d.ledger.finish('o/r', 37, 'merged');
     await d.pollRepo('o/r');
     refreshViews(d);
     expect(d.ledger.data.work['o/r#34']!.finished).toEqual({ at: Date.parse(closedAt), how: 'merged' });
+    expect(d.ledger.data.work['o/r#37']!.finished).toBeUndefined();
     const phases = Object.fromEntries(d.workViews().map((v) => [v.issue, v.phase]));
-    expect(phases).toEqual({ 34: 'done', 35: 'queued', 36: 'done' });
+    expect(phases).toEqual({ 34: 'done', 35: 'queued', 36: 'done', 37: 'queued' });
     expect(d.workViews().find((v) => v.issue === 35)!.issueState).toBe('open');
     expect(d.ledger.data.work['o/r#36']!.finished!.how).toBe('gone');
     await d.stop();

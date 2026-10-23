@@ -435,9 +435,14 @@ export type PollStatus = {
   failures: number;
 };
 
-// a repository with unfinished work, or that had a repo session, where no repo session is live: nobody dispatches its
-// work, and each issue opened in it reaches the coordinator at once. last is its repo session seen most recently
-export type Unattended = { repo: RepoName; open: number; last?: { session: string; seenAt: number } };
+// a claude process running in a checkout of a repository that never registered with helm: one waiting on input
+// before its conversation starts, such as a `claude --resume <term>` in its picker
+export type Waiting = { pid: number; cwd: string; since?: number };
+
+// a repository with unfinished work, or that had a repo session, or with a claude process waiting in its checkout,
+// where no repo session is live: nobody dispatches its work, and each issue opened in it reaches the coordinator at
+// once. last is its repo session seen most recently
+export type Unattended = { repo: RepoName; open: number; last?: { session: string; seenAt: number }; waiting?: Waiting[] };
 
 export type Fleet = {
   version: string;

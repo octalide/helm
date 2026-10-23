@@ -20,6 +20,10 @@ describe('tree', () => {
     expect(percent(root!.rollup)).toBe(25);
     expect(root!.children.map((c) => c.phase)).toEqual(['ci', 'blocked', 'parked', 'done']);
     expect(root!.children[0]!.plan).toEqual({ done: 1, total: 2 });
+    // abandoned work leaves its open issue open and unowned, not done
+    const [again] = buildTree([f], [work('o/r', 2, 'done', { finished: { at: T0, how: 'abandoned' } })]);
+    expect(again!.children[0]!.phase).toBeUndefined();
+    expect(again!.rollup).toMatchObject({ done: 1, unowned: 3 });
   });
 
   it('nests sub-epics across watched repositories and counts an unwatched one from its summary', () => {

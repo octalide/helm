@@ -2,7 +2,7 @@ import { isDone, isPassing, verdictOf } from '../core/checks.ts';
 import { forPerson, isOpen, isRecord, unreviewed } from '../core/decision.ts';
 import { rollupText } from '../core/tree.ts';
 import { selfWorked } from '../core/work.ts';
-import type { Branch, Check, Decision, Fleet, ForgeState, Issue, Job, LocalState, Pull, Run, Session, Subscription, TreeNode, Unattended, Worktree, WorkView } from '../core/types.ts';
+import type { Branch, Check, Decision, Fleet, ForgeState, Issue, Job, LocalState, Pull, Run, Session, Subscription, TreeNode, Unattended, Waiting, Worktree, WorkView } from '../core/types.ts';
 
 export function ago(ms: number, now: number): string {
   const s = Math.max(0, Math.round((now - ms) / 1000));
@@ -122,7 +122,12 @@ export function sessionLine(s: Session, now: number, self?: string): string {
 
 export function unattendedLine(u: Unattended, now: number): string {
   const open = u.open ? `${u.open} open work item${u.open === 1 ? '' : 's'}` : 'no open work';
-  return `${u.repo}: no live repo session · ${open}${u.last ? ` · last ${u.last.session}, seen ${ago(u.last.seenAt, now)} ago` : ''}`;
+  return `${u.repo}: no live repo session · ${open}${u.last ? ` · last ${u.last.session}, seen ${ago(u.last.seenAt, now)} ago` : ''}${(u.waiting ?? []).map((p) => ` · ${waitingText(p, now)}`).join('')}`;
+}
+
+// a claude process helm cannot see, told so the person reads a session waiting on them rather than one missing
+export function waitingText(p: Waiting, now: number): string {
+  return `claude pid ${p.pid} unregistered in ${p.cwd}${p.since !== undefined ? `, up ${ago(p.since, now)}` : ''}, waiting on input (a resume picker?)`;
 }
 
 export function subscriptionLine(s: Subscription, describe: (s: Subscription) => string): string {

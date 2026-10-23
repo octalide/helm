@@ -2,7 +2,8 @@ import type { ClaimBody, DecisionBody, QueueBody, RegisterBody, ReportBody, Subs
 import { isOpen } from '../core/decision.ts';
 import { workKey } from '../core/protocol.ts';
 import { inherited, selfWorked } from '../core/work.ts';
-import type { AdoptionRecord, AgentRecord, Answer, Audience, Decision, HelmEvent, Leftover, Letter, Phase, RepoName, RoutingPick, Session, SessionRole, Subscription, Unattended, Work } from '../core/types.ts';
+import { agentStatusOf, liveStatus } from './derive.ts';
+import type { AdoptionRecord, AgentRecord, Answer, Audience, Decision, HelmEvent, Leftover, Letter, Phase, RepoName, RoutingPick, Session, SessionRole, Subscription, Unattended, Waiting, Work } from '../core/types.ts';
 
 // bumped when the stored shape changes; an older file is migrated or refused, never read as this one
 export const LEDGER_VERSION = 6;
@@ -328,6 +329,12 @@ export class Ledger {
     if (was && !was.finished && was.owner && was.owner !== b.session && this.live(was.owner) && !b.force) {
       throw new ClaimError(`${key} belongs to session ${was.owner}`, was.owner);
     }
+    const held = was && !was.finished && !b.force ? this.holder(was) : undefined;
+    if (held && b.agent !== held) {
+      // a subagent of the holder works for it, so its claim is the holder's
+      if (b.agent && this.descends(was!.owner!, b.agent, held)) b = { ...b, agent: held };
+      else throw new ClaimError(`${key} is held by live agent ${held} of session ${was!.owner}: wait for it to end, message it, or release the issue first`, was!.owner!);
+    }
     const base: Work = was && !was.finished ? was : { repo: b.repo, issue: b.issue, title: title ?? `#${b.issue}`, order: this.nextOrder(b.session), queuedAt: now, updatedAt: now };
     const w: Work = {
       ...base,
@@ -346,6 +353,24 @@ export class Ledger {
     this.data.work[key] = w;
     this.changed();
     return w;
+  }
+
+  // the live agent that holds the work, from which nothing else may take it: one its owner session lists live, or one
+  // claimed too recently to be listed yet. an agent that reported stopped has stood down
+  holder(w: Work): string | undefined {
+    if (!w.agent || w.report?.state === 'stopped') return undefined;
+    return liveStatus(agentStatusOf(w, new Map(Object.entries(this.data.sessions)), this.now())) ? w.agent : undefined;
+  }
+
+  // whether an agent of the session runs inside another, at any depth
+  private descends(session: string, agent: string, ancestor: string): boolean {
+    const agents = this.data.sessions[session]?.agents ?? [];
+    const seen = new Set<string>();
+    for (let id: string | undefined = agent; id && !seen.has(id); id = agents.find((a) => a.id === id)?.parentId) {
+      if (id === ancestor) return true;
+      seen.add(id);
+    }
+    return false;
   }
 
   private handOver(session: string, agent: string, to: string, toAgent: string): void {
@@ -521,6 +546,8 @@ export class Ledger {
     const key = workKey(b.repo, b.issue);
     const w = this.data.work[key];
     if (!w) throw new Error(`${key} is not in the ledger: claim it first`);
+    // a subagent of the holder reports for it
+    if (b.agent && w.agent && b.agent !== w.agent && w.owner && this.descends(w.owner, b.agent, w.agent)) b = { ...b, agent: w.agent };
     if (b.agent && w.agent && b.agent !== w.agent) throw new ClaimError(`${key} has moved on: agent ${w.agent} holds it, not ${b.agent}`, w.owner ?? b.session);
     const now = this.now();
     w.report = { state: b.state, at: now, ...(b.note ? { note: b.note } : {}) };
@@ -596,6 +623,16 @@ export class Ledger {
     const w = this.data.work[workKey(repo, issue)];
     if (!w || w.finished) return undefined;
     w.finished = { at: Math.min(at, this.now()), how };
+    w.updatedAt = this.now();
+    this.changed();
+    return w;
+  }
+
+  // the forge shows open an issue whose work it had finished
+  reopen(repo: string, issue: number): Work | undefined {
+    const w = this.data.work[workKey(repo, issue)];
+    if (!w?.finished) return undefined;
+    delete w.finished;
     w.updatedAt = this.now();
     this.changed();
     return w;
@@ -783,8 +820,9 @@ export class Ledger {
     this.changed();
   }
 
-  // the repositories with unfinished work, or that had a repo session, where no repo session is live
-  unattended(): Unattended[] {
+  // the repositories with unfinished work, or that had a repo session, or with a claude process waiting unregistered
+  // in a checkout, where no repo session is live
+  unattended(waiting: ReadonlyMap<RepoName, Waiting[]> = new Map()): Unattended[] {
     const sessions = Object.values(this.data.sessions);
     const live = new Set(sessions.filter((s) => !s.gone && s.role === 'repo' && s.repo).map((s) => s.repo!));
     const out = new Map<RepoName, Unattended>();
@@ -795,6 +833,7 @@ export class Ledger {
       if (!u.last || s.seenAt > u.last.seenAt) u.last = { session: s.id, seenAt: s.seenAt };
     }
     for (const w of Object.values(this.data.work)) if (!w.finished && !live.has(w.repo)) of(w.repo).open++;
+    for (const [repo, ps] of waiting) if (ps.length && !live.has(repo)) of(repo).waiting = ps;
     return [...out.values()].sort((a, b) => a.repo.localeCompare(b.repo));
   }
 
