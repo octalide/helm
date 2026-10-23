@@ -187,6 +187,7 @@ main { padding: 14px 20px 40px; display: grid; gap: 14px; align-content: start; 
 .chip { display: inline-flex; gap: 4px; align-items: baseline; font-size: 11.5px; padding: 0 7px; border-radius: 999px; background: var(--chip); color: var(--ink-2); white-space: nowrap; border: 1px solid var(--line); }
 .chip.kind { text-transform: uppercase; letter-spacing: 0.04em; font-size: 10.5px; }
 .chip.bad { border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); color: var(--ink); }
+.chip.warn { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); color: var(--ink); }
 .chip.tier small { color: var(--muted); }
 .chip.role-coordinator { box-shadow: inset 3px 0 0 var(--brand); }
 .agent { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--ink-2); }

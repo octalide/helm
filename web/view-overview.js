@@ -172,14 +172,19 @@ function sessionsStrip(open) {
           running.length ? el('div', { class: 'agents-mini' }, running.slice(0, 4).map((a) => el('span', { class: 'agent live', 'data-tip': `${a.type}\n${a.description}` }, a.name || a.description.slice(0, 28)))) : '',
         );
       }),
-      unattended.map((u) =>
-        el(
+      unattended.map((u) => {
+        const waiting = u.waiting ?? [];
+        // a claude process in its checkout that never registered is a session waiting on the person, not one missing
+        const tip = waiting.length
+          ? `a claude process in its checkout has not registered with helm, most likely waiting on input such as a resume picker:\n${waiting.map((p) => `pid ${p.pid} in ${p.cwd}`).join('\n')}`
+          : 'start or resume a session in its checkout, or run /helm role repo in one';
+        return el(
           'a',
-          { class: 'scard', href: href('repos', '', { repo: u.repo }), 'data-tip': 'start or resume a session in its checkout, or run /helm role repo in one' },
-          el('div', { class: 'scard-head' }, el('span', { class: 'chip bad' }, 'no repo session'), el('b', {}, repoShort(u.repo))),
-          el('div', { class: 'dim small' }, plural(u.open, 'open item'), u.last ? [' · last seen ', at(u.last.seenAt, ' ago')] : ''),
-        ),
-      ),
+          { class: 'scard', href: href('repos', '', { repo: u.repo }), 'data-tip': tip },
+          el('div', { class: 'scard-head' }, el('span', { class: `chip ${waiting.length ? 'warn' : 'bad'}` }, waiting.length ? 'session waiting on input' : 'no repo session'), el('b', {}, repoShort(u.repo))),
+          el('div', { class: 'dim small' }, plural(u.open, 'open item'), u.last ? [' · last seen ', at(u.last.seenAt, ' ago')] : '', waiting.length ? [` · ${plural(waiting.length, 'unregistered process', 'unregistered processes')}`] : ''),
+        );
+      }),
     ),
   );
 }
