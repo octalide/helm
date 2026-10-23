@@ -61,12 +61,36 @@ describe('ledger', () => {
     expect(l.claim({ session: 'B', repo: 'o/r', issue: 1, force: true }, undefined).owner).toBe('B');
   });
 
+  it('keeps work with the live agent that holds it, and takes its subagents\' claims and reports as its own', () => {
+    const { l, tick } = ledger();
+    l.register({ id: 'A', cwd: '/', repo: 'o/r' });
+    l.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'x' }, 'one');
+    const a = (id: string, status: AgentStatus, parentId?: string) => ({ id, type: 't', description: 'd', status, ...(parentId ? { parentId } : {}) });
+    l.heartbeat('A', [a('x', 'running'), a('s', 'running', 'x'), a('ss', 'running', 's'), a('o', 'running')]);
+    // a dispatch, an unrelated agent and an id no list names are all refused, naming the holder
+    for (const agent of [undefined, 'o', 'fork']) expect(() => l.claim({ session: 'A', repo: 'o/r', issue: 1, ...(agent ? { agent } : {}) }, 'one')).toThrow(/held by live agent x/);
+    expect(l.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'ss' }, 'one').agent).toBe('x');
+    expect(l.report({ session: 'A', agent: 'ss', repo: 'o/r', issue: 1, state: 'working', note: 'deep' }).work).toMatchObject({ agent: 'x', report: { note: 'deep' } });
+    expect(() => l.report({ session: 'A', agent: 'o', repo: 'o/r', issue: 1, state: 'working' })).toThrow(/agent x holds it/);
+    // a fresh claim holds through the grace before its session lists it, and not past it
+    l.heartbeat('A', [a('x', 'completed')]);
+    l.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'y' }, 'one');
+    expect(() => l.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'z' }, 'one')).toThrow(/held by live agent y/);
+    tick(120_000);
+    expect(l.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'z' }, 'one').agent).toBe('z');
+    // an agent that reported stopped has stood down, live or not
+    l.heartbeat('A', [a('z', 'idle')]);
+    l.report({ session: 'A', agent: 'z', repo: 'o/r', issue: 1, state: 'stopped' });
+    expect(l.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'w' }, 'one').agent).toBe('w');
+  });
+
   it('logs each routing that starts an agent past a re-dispatch, and drops it after a month', () => {
     const { l, tick } = ledger();
     l.register({ id: 'A', cwd: '/', repo: 'o/r' });
     const routing = (tier: string) => ({ tier, model: 'm', effort: 'high' as const, by: 'judge' as const, at: T0 });
     l.claim({ session: 'A', repo: 'o/r', issue: 1, routing: routing('deep') }, 'one');
     l.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'x', routing: routing('deep') }, 'one');
+    l.heartbeat('A', [{ id: 'x', type: 't', description: 'one', status: 'completed' }]);
     l.claim({ session: 'A', repo: 'o/r', issue: 1, agent: 'y', routing: routing('light') }, 'one');
     expect(l.data.picks.map((p) => [p.tier, p.agent])).toEqual([['deep', 'x'], ['light', 'y']]);
     tick(31 * 24 * 3600_000);

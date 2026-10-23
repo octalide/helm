@@ -2,6 +2,7 @@ import type { ClaimBody, DecisionBody, QueueBody, RegisterBody, ReportBody, Subs
 import { isOpen } from '../core/decision.ts';
 import { workKey } from '../core/protocol.ts';
 import { inherited, selfWorked } from '../core/work.ts';
+import { agentStatusOf, liveStatus } from './derive.ts';
 import type { AdoptionRecord, AgentRecord, Answer, Audience, Decision, HelmEvent, Leftover, Letter, Phase, RepoName, RoutingPick, Session, SessionRole, Subscription, Unattended, Work } from '../core/types.ts';
 
 // bumped when the stored shape changes; an older file is migrated or refused, never read as this one
@@ -328,6 +329,12 @@ export class Ledger {
     if (was && !was.finished && was.owner && was.owner !== b.session && this.live(was.owner) && !b.force) {
       throw new ClaimError(`${key} belongs to session ${was.owner}`, was.owner);
     }
+    const held = was && !was.finished && !b.force ? this.holder(was) : undefined;
+    if (held && b.agent !== held) {
+      // a subagent of the holder works for it, so its claim is the holder's
+      if (b.agent && this.descends(was!.owner!, b.agent, held)) b = { ...b, agent: held };
+      else throw new ClaimError(`${key} is held by live agent ${held} of session ${was!.owner}: wait for it to end, message it, or release the issue first`, was!.owner!);
+    }
     const base: Work = was && !was.finished ? was : { repo: b.repo, issue: b.issue, title: title ?? `#${b.issue}`, order: this.nextOrder(b.session), queuedAt: now, updatedAt: now };
     const w: Work = {
       ...base,
@@ -346,6 +353,24 @@ export class Ledger {
     this.data.work[key] = w;
     this.changed();
     return w;
+  }
+
+  // the live agent that holds the work, from which nothing else may take it: one its owner session lists live, or one
+  // claimed too recently to be listed yet. an agent that reported stopped has stood down
+  holder(w: Work): string | undefined {
+    if (!w.agent || w.report?.state === 'stopped') return undefined;
+    return liveStatus(agentStatusOf(w, new Map(Object.entries(this.data.sessions)), this.now())) ? w.agent : undefined;
+  }
+
+  // whether an agent of the session runs inside another, at any depth
+  private descends(session: string, agent: string, ancestor: string): boolean {
+    const agents = this.data.sessions[session]?.agents ?? [];
+    const seen = new Set<string>();
+    for (let id: string | undefined = agent; id && !seen.has(id); id = agents.find((a) => a.id === id)?.parentId) {
+      if (id === ancestor) return true;
+      seen.add(id);
+    }
+    return false;
   }
 
   private handOver(session: string, agent: string, to: string, toAgent: string): void {
@@ -521,6 +546,8 @@ export class Ledger {
     const key = workKey(b.repo, b.issue);
     const w = this.data.work[key];
     if (!w) throw new Error(`${key} is not in the ledger: claim it first`);
+    // a subagent of the holder reports for it
+    if (b.agent && w.agent && b.agent !== w.agent && w.owner && this.descends(w.owner, b.agent, w.agent)) b = { ...b, agent: w.agent };
     if (b.agent && w.agent && b.agent !== w.agent) throw new ClaimError(`${key} has moved on: agent ${w.agent} holds it, not ${b.agent}`, w.owner ?? b.session);
     const now = this.now();
     w.report = { state: b.state, at: now, ...(b.note ? { note: b.note } : {}) };
