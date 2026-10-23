@@ -454,6 +454,40 @@ describe('daemon', () => {
     await d.stop();
   });
 
+  it('lists a claude process in a checkout that never registered on its repository, once past its start', async () => {
+    let now = T0;
+    const home = await mkdtemp(join(tmpdir(), 'helm-test-'));
+    dirs.push(home);
+    const repo = join(home, 'src', 'r');
+    await mkdir(join(repo, '.git'), { recursive: true });
+    const git = async (_cwd: string, args: string[]) => (args[0] === 'config' ? 'git@github.com:o/r.git' : args[0] === 'worktree' ? `worktree ${repo}\nHEAD a\nbranch refs/heads/dev\n` : '');
+    const gh = { rates: {}, conditional: async () => Promise.reject(new Error('offline')) } as unknown as GitHub;
+    const procs = table({ 50: [repo, 'claude --resume m'], 51: [join(repo, 'web'), 'claude'], 52: ['/elsewhere', 'claude'] });
+    const claude = async () => [
+      { pid: 50, session: 'P', cwd: repo, startedAt: T0 },
+      { pid: 51, session: 'A', cwd: join(repo, 'web'), startedAt: T0 },
+      { pid: 52, session: 'Q', cwd: '/elsewhere', startedAt: T0 },
+    ];
+    const d = new Daemon({ paths: helmPaths({ HOME: home, HELM_HOME: home }), config: { ...DEFAULT_CONFIG, roots: [join(home, 'src')] }, gh, version: '0', now: () => now, loops: false, git, procs, claude });
+    await d.start();
+    d.register({ id: 'A', cwd: repo, repo: 'o/r', protocol: 3 });
+    await d.ask('o/r');
+    d.endSession('A');
+    // just started, it may yet register
+    await d.scanWaiting();
+    expect(d.fleet().unattended).toEqual([{ repo: 'o/r', open: 0, last: { session: 'A', seenAt: T0 } }]);
+    now += 120_000;
+    expect(await d.scanWaiting()).toBe(true);
+    expect(d.fleet().unattended[0]?.waiting).toEqual([{ pid: 50, cwd: repo, since: T0 }, { pid: 51, cwd: join(repo, 'web'), since: T0 }]);
+    // a live repo session there leaves nothing to list, and a process that registered is no longer waiting
+    d.register({ id: 'A', cwd: repo, repo: 'o/r', protocol: 3 });
+    await d.scanWaiting();
+    expect(d.fleet().unattended).toEqual([]);
+    d.endSession('A');
+    expect(d.fleet().unattended[0]?.waiting).toEqual([{ pid: 50, cwd: repo, since: T0 }]);
+    await d.stop();
+  });
+
   it('tells the fleet once of an issue nobody owns 30 minutes after it opened, and of none it already had', async () => {
     let now = T0;
     const clock = () => now;

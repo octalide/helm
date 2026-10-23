@@ -50,6 +50,8 @@ describe('pane', () => {
     const line = 'o/m: no live repo session · 2 open work items · last M, seen 2h ago';
     expect(text(paneRows(none, { session: 'C', role: 'coordinator' }, opts()))).toContain(line);
     expect(fleetBlock(none, 'C').split('\n')).toContain(line);
+    const picker = fleet({ sessions: [], unattended: [{ repo: 'o/m', open: 0, waiting: [{ pid: 7, cwd: '/m', since: T0 - 600_000 }] }] });
+    expect(fleetBlock(picker, 'C').split('\n')).toContain('o/m: no live repo session · no open work · claude pid 7 unregistered in /m, up 10m, waiting on input (a resume picker?)');
   });
 
   it('shows epics touching the session with their rollup and what moves under them', () => {
