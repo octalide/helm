@@ -57,7 +57,8 @@ export function activeOf(w: Work, ctx: PhaseContext): boolean {
 // stuck: the work's pr subscription held back ci its pr head settled, and a later poll still saw that head.
 // carried: another work item on the same open pr has someone on it, so this one moves with that pr
 export function phaseOf(w: Work, ctx: PhaseContext): Phase {
-  if (w.finished || ctx.issueClosed || ctx.pull?.state === 'merged') return 'done';
+  // a merged pr alone finishes nothing: an issue worked over several prs stays open, and done follows its close
+  if (w.finished || ctx.issueClosed) return 'done';
   if (ctx.blocking || w.report?.state === 'blocked') return 'blocked';
   // its worker stopped on purpose: set aside until a dispatch, a working report or a resume picks it up again
   if (w.report?.state === 'stopped') return 'parked';
